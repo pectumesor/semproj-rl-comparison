@@ -1,0 +1,6 @@
+wandb:
+  project: semproj
+  entity: eazevedo
+  group: null        # override per experiment, e.g. "memory_ablation"
+  tags: []
+  mode: online       # online | offline | disabled

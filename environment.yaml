@@ -1,0 +1,36 @@
+name: semproj
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+  - pytorch>=2.2
+  - torchvision
+  - numpy<2.0          # torch still has occasional numpy 2.x issues
+  - pip:
+    - gymnasium>=0.29  
+    - stable-baselines3 # optional — useful to cross-check your PPO/SAC impl
+
+  # Config management
+  - pip:
+    - hydra-core>=1.3  
+    - omegaconf
+
+  # Logging & tracking
+  - pip:
+    - wandb            # experiment tracking, great for ablation sweeps
+
+  # Viz & analysis
+  - matplotlib
+  - seaborn
+  - pip:
+    - opencv-python-headless 
+
+  # Dev
+  - pytest
+  - pip:
+    - black
+    - ruff

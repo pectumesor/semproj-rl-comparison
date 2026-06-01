@@ -1,0 +1,12 @@
+# configs/experiments/memory_ablation.yaml
+defaults:
+  - base
+
+wandb:
+  group: memory_ablation
+  tags: [memory, lstm]
+
+memory:
+  strategy: lstm
+  hidden_size: 256
+  bptt_window: 64
