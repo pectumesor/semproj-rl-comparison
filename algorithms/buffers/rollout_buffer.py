@@ -1,5 +1,7 @@
+from dataclasses import dataclass
 import torch
 
+@dataclass
 class RolloutBatch:
     obs: torch.Tensor
     act: torch.Tensor
