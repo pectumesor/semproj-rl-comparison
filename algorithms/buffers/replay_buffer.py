@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 import torch
 
+#TODO: Adjust replay buffer for LSTM Policy backbone
+
 @dataclass
 class ReplayBatch:
     obs: torch.Tensor
@@ -8,7 +10,7 @@ class ReplayBatch:
     rew: torch.Tensor
     next_obs: torch.Tensor
     done: torch.Tensor
-    
+
 
 
 class ReplayBuffer:
