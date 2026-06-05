@@ -11,34 +11,47 @@ class RolloutBatch:
     val: torch.Tensor
     ret: torch.Tensor
     adv: torch.Tensor
+    lstm_hidden: torch.Tensor = None
+    lstm_cell: torch.Tensor = None
 
 class RolloutBuffer:
     def __init__(
             self,
             obs_dim: int,
             act_dim: int,
-            size: int,
+            num_steps: int,
+            num_envs: int,
             gamma: float,
             gae_lambda: float,
-            device: torch.device,):
+            device: torch.device,
+            lstm: bool,
+            num_layers: int,
+            hidden_dim: int,
+            ):
         
-        self.obs_buf = torch.zeros((size, obs_dim), dtype=torch.float, device=device)
-        self.act_buf = torch.zeros((size, act_dim), dtype=torch.float, device=device)
-        self.logp_buf = torch.zeros(size, dtype=torch.float, device=device)
-        self.mu_buf = torch.zeros(size, dtype=torch.float, device=device)
-        self.std_buf = torch.zeros(size, dtype=torch.float, device=device)
-        self.val_buf = torch.zeros(size, dtype=torch.float, device=device)
+        self.obs_buf = torch.zeros((num_steps, num_envs, obs_dim), dtype=torch.float, device=device)
+        self.act_buf = torch.zeros((num_steps, num_envs, act_dim), dtype=torch.float, device=device)
+        self.logp_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
+        self.mu_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
+        self.std_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
+        self.val_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
 
-        self.done_buf = torch.zeros(size, dtype=torch.bool, device=device)
-        self.rew_buf = torch.zeros(size, dtype=torch.float, device=device) # Rewards
+        self.done_buf = torch.zeros((num_steps, num_envs), dtype=torch.bool, device=device)
+        self.rew_buf = torch.zeros((num_steps,num_envs), dtype=torch.float, device=device) # Rewards
 
-        self.ret_buf = torch.zeros(size, dtype=torch.float, device=device) # Reward to go
-        self.adv_buf = torch.zeros(size, dtype=torch.float, device=device)
+        self.ret_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device) # Reward to go
+        self.adv_buf = torch.zeros((num_steps,num_envs), dtype=torch.float, device=device)
+
+        # LSTM states
+        self.lstm = lstm
+        if self.lstm:
+            self.lstm_hidden_buf = torch.zeros((num_steps, num_layers, num_envs, hidden_dim), dtype=torch.float, device=device)
+            self.lstm_cell_buf = torch.zeros((num_steps, num_layers, num_envs, hidden_dim), dtype=torch.float, device=device)
 
         self.gamma = gamma
         self.gae_lambda = gae_lambda
-        self.capacity = size
-
+        self.capacity = num_steps
+       
         self.ptr=0
 
     def store(
@@ -50,9 +63,11 @@ class RolloutBuffer:
             std: torch.Tensor,
             val: torch.Tensor,
             rew: torch.Tensor,
-            done: torch.Tensor
+            done: torch.Tensor,
+            lstm_hidden: torch.Tensor = None,
+            lstm_cell: torch.Tensor = None
     ):
-        if self.ptr >= self.max_size:
+        if self.ptr >= self.capacity:
             raise ValueError("RolloutBuffer is full. Call get() first")
         
         self.obs_buf[self.ptr] = obs
@@ -63,6 +78,12 @@ class RolloutBuffer:
         self.val_buf[self.ptr] = val
         self.rew_buf[self.ptr] = rew
         self.done_buf[self.ptr] = done
+
+        # -- LSTM -- # 
+        if self.lstm:
+            self.lstm_hidden_buf[self.ptr] = lstm_hidden
+            self.lstm_cell_buf[self.ptr] = lstm_cell
+
         self.ptr += 1
 
     def compute_returns(self, last_val):
@@ -95,13 +116,26 @@ class RolloutBuffer:
                 f"RolloutBuffer must be full before calling get(). "
                 f"Current size: {self.ptr}, expected: {self.max_size}"
             )
-        
-        batch = RolloutBatch(
+        if self.lstm:
+            batch = RolloutBatch(
+                obs=self.obs_buf,
+                act=self.act_buf,
+                logp=self.logp_buf,
+                mu=self.mu_buf,
+                std=self.std_buf,
+                val=self.val_buf,
+                ret=self.ret_buf,
+                adv=self.adv_buf,
+                lstm_hidden=self.lstm_hidden_buf,
+                lstm_cell=self.lstm_cell_buf)
+        else:    
+            batch = RolloutBatch(
             obs=self.obs_buf,
             act=self.act_buf,
             logp=self.logp_buf,
             mu=self.mu_buf,
             std=self.std_buf,
+            val=self.val_buf,
             ret=self.ret_buf,
             adv=self.adv_buf
         )

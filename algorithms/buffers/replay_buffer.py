@@ -8,6 +8,7 @@ class ReplayBatch:
     rew: torch.Tensor
     next_obs: torch.Tensor
     done: torch.Tensor
+    
 
 
 class ReplayBuffer:
