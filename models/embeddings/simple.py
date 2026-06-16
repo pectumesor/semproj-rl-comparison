@@ -1,7 +1,7 @@
 from typing import Sequence
 import torch
 import torch.nn as nn
-from ..utils import build_mlp, build_cnn
+from ..network_utils import build_mlp, build_cnn
 
 class MLPObservationEmbeddings(nn.Module):
     """

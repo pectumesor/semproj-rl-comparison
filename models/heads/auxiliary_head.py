@@ -1,4 +1,4 @@
-from ..utils import build_mlp
+from ..network_utils import build_mlp
 from typing import Sequence
 import torch
 import torch.nn as nn

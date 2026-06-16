@@ -28,8 +28,8 @@ class RolloutBuffer:
         self.obs_buf = torch.zeros((num_steps, num_envs, obs_dim), dtype=torch.float, device=device)
         self.act_buf = torch.zeros((num_steps, num_envs, act_dim), dtype=torch.float, device=device)
         self.logp_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
-        self.mu_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
-        self.std_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
+        self.mu_buf = torch.zeros((num_steps, num_envs, act_dim), dtype=torch.float, device=device)
+        self.std_buf = torch.zeros((num_steps, num_envs, act_dim), dtype=torch.float, device=device)
         self.val_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
 
         self.done_buf = torch.zeros((num_steps, num_envs), dtype=torch.bool, device=device)
