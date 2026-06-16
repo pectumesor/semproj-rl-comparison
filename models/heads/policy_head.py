@@ -32,7 +32,10 @@ class GuassianPolicyHead(nn.Module):
         self.log_std = nn.Parameter(torch.zeros(actions_dim))
         self.distribution = None
 
-    def forward(self, backbone_feats: torch.Tensor):
+    def forward(self):
+        pass
+
+    def update_distribution(self, backbone_feats: torch.Tensor):
 
         """
         Updates the classes self.distribution feature to N(\mu(feats), \Sigma_\phi)
@@ -48,7 +51,7 @@ class GuassianPolicyHead(nn.Module):
         """
             Sample actions from the current self.distribution \pi_\theta(a|s)
         """
-        self.forward(backbone_feats)
+        self.update_distribution(backbone_feats)
         return self.distribution.sample()
     
     def log_prob_action(self, actions: torch.Tensor):
@@ -92,8 +95,10 @@ class SquashedGaussianPolicyHead(nn.Module):
         self.log_std = nn.Linear(hidden_sizes[-1], action_dim)
         self.distribution = None
 
+    def forward(self):
+        pass
 
-    def forward(self, backbone_feats: torch.Tensor):
+    def update_distribution(self, backbone_feats: torch.Tensor):
 
         """
         Update the distribution \pi_\theta(\mu(s), \Sigma_\phi)
@@ -111,7 +116,7 @@ class SquashedGaussianPolicyHead(nn.Module):
         Sample action from distibution a = tanh(u), u ~ \pi(.|s) and squashed log probabilites
         """
 
-        self.forward(bacbkone_feats)
+        self.update_distribution(bacbkone_feats)
         u =  self.distribution.rsample()
         log_u = self.distribution.log_prob(u)
         a = torch.tanh(u)

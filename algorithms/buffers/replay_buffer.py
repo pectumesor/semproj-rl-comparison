@@ -12,7 +12,6 @@ class ReplayBatch:
     done: torch.Tensor
 
 
-
 class ReplayBuffer:
     def __init__(
             self,

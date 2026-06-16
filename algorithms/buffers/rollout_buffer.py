@@ -11,8 +11,7 @@ class RolloutBatch:
     val: torch.Tensor
     ret: torch.Tensor
     adv: torch.Tensor
-    lstm_hidden: torch.Tensor = None
-    lstm_cell: torch.Tensor = None
+    done: torch.Tensor
 
 class RolloutBuffer:
     def __init__(
@@ -24,9 +23,6 @@ class RolloutBuffer:
             gamma: float,
             gae_lambda: float,
             device: torch.device,
-            lstm: bool,
-            num_layers: int,
-            hidden_dim: int,
             ):
         
         self.obs_buf = torch.zeros((num_steps, num_envs, obs_dim), dtype=torch.float, device=device)
@@ -42,16 +38,11 @@ class RolloutBuffer:
         self.ret_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device) # Reward to go
         self.adv_buf = torch.zeros((num_steps,num_envs), dtype=torch.float, device=device)
 
-        # LSTM states
-        self.lstm = lstm
-        if self.lstm:
-            self.lstm_hidden_buf = torch.zeros((num_steps, num_layers, num_envs, hidden_dim), dtype=torch.float, device=device)
-            self.lstm_cell_buf = torch.zeros((num_steps, num_layers, num_envs, hidden_dim), dtype=torch.float, device=device)
-
         self.gamma = gamma
         self.gae_lambda = gae_lambda
-        self.capacity = num_steps
-       
+        self.num_steps = num_steps
+        self.num_envs = num_envs
+        self.device = device
         self.ptr=0
 
     def store(
@@ -64,10 +55,8 @@ class RolloutBuffer:
             val: torch.Tensor,
             rew: torch.Tensor,
             done: torch.Tensor,
-            lstm_hidden: torch.Tensor = None,
-            lstm_cell: torch.Tensor = None
     ):
-        if self.ptr >= self.capacity:
+        if self.ptr >= self.num_steps:
             raise ValueError("RolloutBuffer is full. Call get() first")
         
         self.obs_buf[self.ptr] = obs
@@ -79,11 +68,6 @@ class RolloutBuffer:
         self.rew_buf[self.ptr] = rew
         self.done_buf[self.ptr] = done
 
-        # -- LSTM -- # 
-        if self.lstm:
-            self.lstm_hidden_buf[self.ptr] = lstm_hidden
-            self.lstm_cell_buf[self.ptr] = lstm_cell
-
         self.ptr += 1
 
     def compute_returns(self, last_val):
@@ -92,8 +76,8 @@ class RolloutBuffer:
         """
 
         advantage = 0
-        for step in reversed(range(self.capacity)):
-            if step == self.capacity - 1:
+        for step in reversed(range(self.num_steps)):
+            if step == self.num_steps - 1:
                 next_val = last_val
             else:
                 next_val = self.val_buf[step + 1]
@@ -111,25 +95,13 @@ class RolloutBuffer:
 
     def get(self) -> RolloutBatch:
 
-        if self.ptr != self.max_size:
+        if self.ptr != self.num_steps:
             raise ValueError(
                 f"RolloutBuffer must be full before calling get(). "
-                f"Current size: {self.ptr}, expected: {self.max_size}"
+                f"Current size: {self.ptr}, expected: {self.num_steps}"
             )
-        if self.lstm:
-            batch = RolloutBatch(
-                obs=self.obs_buf,
-                act=self.act_buf,
-                logp=self.logp_buf,
-                mu=self.mu_buf,
-                std=self.std_buf,
-                val=self.val_buf,
-                ret=self.ret_buf,
-                adv=self.adv_buf,
-                lstm_hidden=self.lstm_hidden_buf,
-                lstm_cell=self.lstm_cell_buf)
-        else:    
-            batch = RolloutBatch(
+    
+        batch = RolloutBatch(
             obs=self.obs_buf,
             act=self.act_buf,
             logp=self.logp_buf,
@@ -137,7 +109,8 @@ class RolloutBuffer:
             std=self.std_buf,
             val=self.val_buf,
             ret=self.ret_buf,
-            adv=self.adv_buf
+            adv=self.adv_buf,
+            done=self.done_buf
         )
 
         self.ptr=0
