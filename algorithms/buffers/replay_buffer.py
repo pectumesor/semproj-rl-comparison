@@ -17,19 +17,24 @@ class ReplayBuffer:
             self,
             obs_dim:int,
             act_dim:int,
-            size: int,
+            num_steps: int,
+            num_envs: int,
             gamma:int,
             device:torch.device
             ):
         
-        self.obs_buf = torch.Tensor((obs_dim, size), dtype=torch.float, device=device)
-        self.act_buf = torch.Tensor((act_dim, size), dtype=torch.float, device=device)
-        self.next_obs_buf = torch.Tensor((obs_dim, size), dtype=torch.float, device=device)
-        self.rew_buf = torch.Tensor(size, dtype=torch.float, device=device)
-        self.done_buf = torch.Tensor(size, dtype=torch.bool, device=device)
+        self.obs_buf = torch.Tensor((num_steps, num_envs, obs_dim), dtype=torch.float, device=device)
+        self.act_buf = torch.Tensor((num_steps, num_envs, act_dim), dtype=torch.float, device=device)
+        self.next_obs_buf = torch.Tensor((num_steps, num_envs, obs_dim), dtype=torch.float, device=device)
+        self.rew_buf = torch.Tensor((num_steps, num_envs), dtype=torch.float, device=device)
+        self.done_buf = torch.Tensor((num_steps,  num_envs), dtype=torch.bool, device=device)
 
         self.gamma = gamma
-        self.max_size = size
+        self.num_steps = num_steps
+        self.num_envs = num_envs
+        self.device = device
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
         
         self.ptr = 0
         self.size = 0
@@ -49,11 +54,11 @@ class ReplayBuffer:
         self.next_obs_buf[self.ptr] = next_obs
         self.done_buf[self.ptr] = done
 
-        self.ptr = (self.ptr + 1) % self.max_size
-        self.size = min(self.size + 1, self.max_size)
+        self.ptr = (self.ptr + 1) % self.num_steps
+        self.size = min(self.size + 1, self.num_steps)
 
     
-    def sample_batch(self, batch_size:int) -> ReplayBatch:
+    def get(self, batch_size:int) -> ReplayBatch:
         idxs = torch.randint(0, self.size, size=[batch_size])
 
         return  ReplayBatch(

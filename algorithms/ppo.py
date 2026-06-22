@@ -65,7 +65,7 @@ class PPO(ABC):
         pass
 
 class MLPPPO(PPO):
-
+    
     def __init__(self,
                 buffer: RolloutBuffer, device: torch.device, env: gym.Env, optimizer: optim.Optimizer,
                 n_iterations: int, mini_batch: int, n_epochs: int,
@@ -73,7 +73,7 @@ class MLPPPO(PPO):
                 val_coeff: float, aux_coeff: float, task_coeff: float, intr_coeff: float,
                 eval_env: Optional[gym.Env] = None
                 ):
-
+        super().__init__()
         # -- System --
         self.buffer = buffer
         self.device = device
@@ -98,8 +98,6 @@ class MLPPPO(PPO):
         self.aux_coeff = aux_coeff
         self.task_coeff = task_coeff
         self.intr_coeff = intr_coeff
-
-
 
     def collect_rollout(self, obs: torch.Tensor, done: torch.Tensor):
         # AsyncVectorEnv auto-resets finished envs; next_obs already contains the fresh obs for done envs.
@@ -256,8 +254,6 @@ class MLPPPO(PPO):
             mean_aux_loss=mean_aux_loss
         )
 
-  
-
     def evaluate_policy(self, num_episodes=5):
         if self.eval_env is None:
             return None, None
@@ -304,7 +300,6 @@ class MLPPPO(PPO):
             iteration = iter + 1
 
             # TODO: Logging stats and evaluation on wandb
-
 
 class RecuurentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
