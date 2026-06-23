@@ -2,31 +2,21 @@ import numpy as np
 import json
 
 class RayCast:
-    def __init__(self, cfg, wall_starts, wall_ends):
+    def __init__(self, cfg, wall_starts, wall_ends, num_rays):
 
-        self.max_range = cfg['max_range']
-        self.ray_density = cfg['ray_density']
-        self.fov = cfg['field_of_view'] # In degrees
+        self.max_range = cfg.env.max_range
+        self.ray_density = cfg.env.ray_density
+        self.fov = cfg.env.fov # In degrees
         self.wall_ends = wall_ends
         self.wall_starts = wall_starts
+        self.num_rays = num_rays
     
     def cast_rays(self, facing_direction):
-
-        num_rays = int(self.fov * self.ray_density)
-
-        """
-        Keep an uneven number of rays,
-        so we have one ray at the facing direction and the others
-        evenly spread on each half of the fov
-        """
-        if num_rays % 2 == 0:
-            num_rays += 1
-
         
         half_fov = np.deg2rad(self.fov // 2)
         angles = np.linspace(facing_direction - half_fov, 
                            facing_direction + half_fov, 
-                           num_rays)
+                           self.num_rays)
         
         return np.stack([np.cos(angles), np.sin(angles)], axis=1) * self.max_range
     
@@ -53,7 +43,7 @@ class RayCast:
         """
 
         d = self.cast_rays(facing_direction) 
-        o = position.cpu().detach().numpy()
+        o = position
 
         r = self.wall_ends - self.wall_starts
         e = self.wall_starts - o
@@ -89,7 +79,9 @@ def walls_json_to_numpy(json_path: str) -> np.ndarray:
     with open(json_path) as f:
         walls_dict = json.load(f)
         for edge in walls_dict["edges"]:
-            walls.append((edge["from"], edge["to"]))
+            p = [edge["from"]["x"], edge["from"]["y"]]
+            q = [edge["to"]["x"], edge["to"]["y"]]
+            walls.append((p, q))
 
     return walls
              
@@ -100,6 +92,21 @@ def compute_starts_and_ends(walls):
     wall_ends = np.array([q for _, q in walls])
 
     return wall_starts, wall_ends
+
+def compute_num_rays(fov, ray_density):
+
+    num_rays = int(fov * ray_density)
+
+    """
+        Keep an uneven number of rays,
+        so we have one ray at the facing direction and the others
+        evenly spread on each half of the fov
+    """
+    if num_rays % 2 == 0:
+            num_rays += 1
+    
+    return num_rays
+
 
 
 

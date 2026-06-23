@@ -8,7 +8,7 @@ from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer
 import torch.optim as optim
 import gymnasium as gym
 
-from ..models.agents import BaseAgent, RecurrentAgent
+from models.agents import BaseAgent, RecurrentAgent
 
 
 
@@ -26,7 +26,7 @@ class PPO(ABC):
     buffer = None
     device = "cpu"
     env = None
-    optimizer = None
+    lr = None
 
     # -- Training Iterations --
     n_iterations = None
@@ -35,6 +35,7 @@ class PPO(ABC):
 
     # -- Architecture --
     agent = None
+
 
     # -- Constants
     gamma = None
@@ -46,10 +47,6 @@ class PPO(ABC):
     task_coeff = None
     intr_coeff = None
 
-
-    @abstractmethod
-    def select_action(self):
-        pass
 
     @abstractmethod
     def collect_rollout(self):
@@ -66,7 +63,7 @@ class PPO(ABC):
 class MLPPPO(PPO):
     
     def __init__(self,
-                buffer: RolloutBuffer, device: torch.device, env: gym.Env, optimizer: optim.Optimizer,
+                buffer: RolloutBuffer, device: torch.device, env: gym.Env, lr: float,
                 n_iterations: int, mini_batch: int, n_epochs: int,
                 agent: BaseAgent | RecurrentAgent, gamma: float, gae_lambda: float, clip_epsilon: float, entropy_coeff: float,
                 val_coeff: float, aux_coeff: float, task_coeff: float, intr_coeff: float,
@@ -78,7 +75,7 @@ class MLPPPO(PPO):
         self.device = device
         self.env = env
         self.eval_env = eval_env
-        self.optimizer = optimizer
+        self.lr = lr
 
         # -- Training Iterations --
         self.n_iterations = n_iterations
@@ -97,6 +94,10 @@ class MLPPPO(PPO):
         self.aux_coeff = aux_coeff
         self.task_coeff = task_coeff
         self.intr_coeff = intr_coeff
+
+
+        self.optimizer = optim.Adam(params=self.agent.parameters(), lr=self.lr)
+
 
     def collect_rollout(self, obs: torch.Tensor, done: torch.Tensor):
         # AsyncVectorEnv auto-resets finished envs; next_obs already contains the fresh obs for done envs.
@@ -269,17 +270,17 @@ class MLPPPO(PPO):
                 episode_length = 0
 
                 while not done:
-                    obs = torch.as_tensor(obs, dtype=torch.float, device=self.device).unsqueeze(0)
-                    action = self.agent.predict_action(obs)
-                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action.squeeze(0).cpu().numpy())
+                    obs_t = torch.as_tensor(obs, dtype=torch.float, device=self.device)
+                    action = self.agent.predict_action(obs_t)
+                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action.cpu().numpy())
 
                     obs = next_obs
-                    episode_return += reward
+                    episode_return += float(reward[0])
                     episode_length += 1
-                    done = terminated or truncated
+                    done = bool(terminated[0]) or bool(truncated[0])
 
-                returns.append(float(episode_return))
-                lengths.append(int(episode_length))
+                returns.append(episode_return)
+                lengths.append(episode_length)
 
         self.agent.train()
         return float(np.mean(returns)), float(np.mean(lengths))

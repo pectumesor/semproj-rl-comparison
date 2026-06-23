@@ -14,10 +14,10 @@ def build_mlp(
         curr_layer = input_dim
 
         for hid_size in hidden_sizes:
-            layers.extend(nn.Linear(curr_layer, hid_size), activation())
+            layers.extend([nn.Linear(curr_layer, hid_size), activation()])
             curr_layer = hid_size
 
-        layers.extend(nn.Linear(curr_layer, output_dim),output_activation())
+        layers.extend([nn.Linear(curr_layer, output_dim), output_activation()])
 
         return nn.Sequential(*layers)
 

@@ -6,11 +6,11 @@ from ..heads import GuassianPolicyHead
 
 class RecurrentAgent(nn.Module):
     def __init__(self,
-                 obs_backbone: nn.Module, policy_backbone: nn.Module,
+                 obs_embed_model: nn.Module, backbone_model: nn.Module,
                  actor: GuassianPolicyHead, critic: nn.Module):
         
-        self.obs_backbone = obs_backbone
-        self.policy_backbone = policy_backbone
+        self.obs_embed_model = obs_embed_model
+        self.backbone_model = backbone_model
         self.actor = actor
         self.critic = critic
 

@@ -3,22 +3,27 @@ import torch
 import torch.nn as nn
 import numpy as np
 from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends 
+from omegaconf import DictConfig
+
 
 
 class NavigationEnv(gym.Env):
 
-    def __init__(self, cfg, room_path: str, agent: nn.Module):
+    def __init__(self, cfg: DictConfig, agent: nn.Module, num_rays: int, obs_dim):
         metadata = {"render_modes": ["human"], "render_fps": 10}
 
         super().__init__()
 
-        self.act_dim = cfg['action_dim']
-        self.obs_dim = cfg['obs_dim']
-        self.max_speed = cfg['max_vel']
-        self.fov = cfg['field_of_view']
-        self.max_steps = cfg['max_steps']
-        self.initial_pos = cfg['init_pos']
-        self.goal_pos = cfg['goal_pos']
+        self.act_dim = cfg.env.act_dim
+        self.obs_dim = obs_dim
+        self.max_speed = cfg.env.max_speed
+        self.fov = cfg.env.fov
+        self.max_steps = cfg.env.max_steps
+        self.initial_pos = np.array([cfg.env.init_pos["x"],
+                                     cfg.env.init_pos["y"]])
+        self.goal_pos = np.array([cfg.env.goal_pos["x"],
+                                  cfg.env.goal_pos["y"]])
+        self.num_rays = num_rays
 
         """
         
@@ -31,11 +36,11 @@ class NavigationEnv(gym.Env):
         
         """
 
-        self.observation_space = gym.Box(
+        self.observation_space = gym.spaces.Box(
             low=0.0,
             high=1.0,
-            dtype = np.float32,
-            shape = (self.obs_dim,)
+            dtype=np.float32,
+            shape=self.obs_dim if isinstance(self.obs_dim, tuple) else (self.obs_dim,)
         )
 
         """
@@ -52,18 +57,18 @@ class NavigationEnv(gym.Env):
             - 1 Max speed
         """
 
-        self.action_space = gym.Box(
+        self.action_space = gym.spaces.Box(
             low=np.array([-1.0, 0.0]),
             high=np.array([1.0, 1.0]),
             dtype=np.float32
         )
 
-        self.walls = walls_json_to_numpy(room_path)
+        self.walls = walls_json_to_numpy(cfg.env.room_path)
         self.agent = agent
 
         # Agent variables
         wall_starts, wall_ends = compute_starts_and_ends(self.walls)
-        self.ray_cast = RayCast(cfg, wall_starts, wall_ends)
+        self.ray_cast = RayCast(cfg, wall_starts, wall_ends, self.num_rays)
         self.facing_direction = np.pi / 2
         self.agent_pos = self.initial_pos
        
@@ -126,7 +131,7 @@ class NavigationEnv(gym.Env):
             self.steps = 0
             truncated = True
 
-        turning_angle = action[0] * self.fƒov
+        turning_angle = action[0] * self.fov
         velocity = action[1] * self.max_speed
 
         self.agent_pos += velocity

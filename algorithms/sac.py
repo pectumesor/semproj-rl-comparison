@@ -9,8 +9,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 import gymnasium as gym
 
-from ..models.agents import BaseAgent, RecurrentAgent
-from ..models.heads import DoubleQNet
+from models.agents import BaseAgent, RecurrentAgent
+from models.heads import DoubleQNet
 
 
 @dataclass

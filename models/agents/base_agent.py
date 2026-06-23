@@ -1,25 +1,24 @@
 import torch
 import torch.nn as nn
 from envs.env_utils import *
-
 from ..heads import GuassianPolicyHead, SquashedGaussianPolicyHead, DoubleQNet, ValueNet
 
 class BaseAgent(nn.Module):
     def __init__(self,
-                 obs_backbone: nn.Module, policy_backbone: nn.Module,
+                 obs_embed_model: nn.Module, backbone_model: nn.Module,
                  actor: GuassianPolicyHead | SquashedGaussianPolicyHead, 
                  critic: DoubleQNet | ValueNet):
-        
-        self.obs_backbone = obs_backbone
-        self.policy_backbone = policy_backbone
+        super().__init__()
+        self.obs_embed_model = obs_embed_model
+        self.backbone_model = backbone_model
         self.actor = actor
         self.critic = critic
 
 
     def forward(self, obs: torch.Tensor):
 
-        obs_feat = self.obs_backbone(obs)
-        h = self.policy_backbone(obs_feat)
+        obs_feat = self.obs_embed_model(obs)
+        h = self.backbone_model(obs_feat)
         return h
     
     def sample_action(self, obs: torch.Tensor):
@@ -53,7 +52,7 @@ class BaseAgent(nn.Module):
     
     def get_value(self, obs: torch.Tensor):
 
-        return self.critic(self.forward(obs))
+        return self.critic(self.forward(obs)).squeeze(-1)
     
     def get_state_action_value(self, obs: torch.Tensor, actions: torch.Tensor):
 

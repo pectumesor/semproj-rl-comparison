@@ -1,0 +1,7 @@
+# Python Cache
+*/__pycache__
+*.pyc
+
+
+#Hydra outputs
+outputs/
