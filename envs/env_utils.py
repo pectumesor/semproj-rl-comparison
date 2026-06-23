@@ -1,15 +1,14 @@
 import numpy as np
-from shapely.geometry import LineString, Point
-from shapely.strtree import STRtree
+import json
 
 class RayCast:
-    def __init__(self, cfg):
+    def __init__(self, cfg, wall_starts, wall_ends):
 
         self.max_range = cfg['max_range']
         self.ray_density = cfg['ray_density']
         self.fov = cfg['field_of_view'] # In degrees
-        self.wall_ends = None
-        self.wall_starts = None
+        self.wall_ends = wall_ends
+        self.wall_starts = wall_starts
     
     def cast_rays(self, facing_direction):
 
@@ -31,7 +30,7 @@ class RayCast:
         
         return np.stack([np.cos(angles), np.sin(angles)], axis=1) * self.max_range
     
-    def scan(self, position, walls, facing_direction):
+    def scan(self, position, facing_direction):
 
         """
         
@@ -55,10 +54,6 @@ class RayCast:
 
         d = self.cast_rays(facing_direction) 
         o = position.cpu().detach().numpy()
-
-        if self.wall_starts is None or self.wall_ends is None:
-            self.wall_starts = np.array([p for p,_ in walls])
-            self.wall_ends = np.array([q for _, q in walls])
 
         r = self.wall_ends - self.wall_starts
         e = self.wall_starts - o
@@ -85,6 +80,29 @@ class RayCast:
 
         return intersections, distances
     
+
+
+def walls_json_to_numpy(json_path: str) -> np.ndarray:
+
+    walls = []
+
+    with open(json_path) as f:
+        walls_dict = json.load(f)
+        for edge in walls_dict["edges"]:
+            walls.append((edge["from"], edge["to"]))
+
+    return walls
+             
+
+def compute_starts_and_ends(walls):
+
+    wall_starts = np.array([p for p,_ in walls])
+    wall_ends = np.array([q for _, q in walls])
+
+    return wall_starts, wall_ends
+
+
+
     
 
 

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from envs.env_utils import *
 
-from ..heads import GuassianPolicyHead, SquashedGaussianPolicyHead, QNet, DoubleQNet, ValueNet
+from ..heads import GuassianPolicyHead, SquashedGaussianPolicyHead, DoubleQNet, ValueNet
 
 class BaseAgent(nn.Module):
     def __init__(self,

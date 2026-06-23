@@ -8,8 +8,7 @@ from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer
 import torch.optim as optim
 import gymnasium as gym
 
-from ..models.agents.base_agent import BaseAgent
-from ..models.agents.recurrent_agent import RecurrentAgent
+from ..models.agents import BaseAgent, RecurrentAgent
 
 
 

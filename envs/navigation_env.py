@@ -2,12 +2,12 @@ import gymnasium as gym
 import torch
 import torch.nn as nn
 import numpy as np
-from .env_utils import RayCast
+from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends 
 
 
 class NavigationEnv(gym.Env):
 
-    def __init__(self, cfg, walls: np.ndarray, agent: nn.Module, ray_cast: RayCast):
+    def __init__(self, cfg, room_path: str, agent: nn.Module):
         metadata = {"render_modes": ["human"], "render_fps": 10}
 
         super().__init__()
@@ -58,11 +58,12 @@ class NavigationEnv(gym.Env):
             dtype=np.float32
         )
 
-        self.walls = walls
+        self.walls = walls_json_to_numpy(room_path)
         self.agent = agent
 
         # Agent variables
-        self.ray_cast = ray_cast
+        wall_starts, wall_ends = compute_starts_and_ends(self.walls)
+        self.ray_cast = RayCast(cfg, wall_starts, wall_ends)
         self.facing_direction = np.pi / 2
         self.agent_pos = self.initial_pos
        
@@ -77,7 +78,7 @@ class NavigationEnv(gym.Env):
         self.agent_pos = self.initial_pos
 
         intersections, distances = self.ray_cast.scan(
-            self.agent_pos, self.walls, self.facing_direction)
+            self.agent_pos, self.facing_direction)
         
         obs = self.get_observations(intersections, distances)
 
@@ -125,13 +126,13 @@ class NavigationEnv(gym.Env):
             self.steps = 0
             truncated = True
 
-        turning_angle = action[0] * self.fov
+        turning_angle = action[0] * self.fƒov
         velocity = action[1] * self.max_speed
 
         self.agent_pos += velocity
         self.facing_direction += turning_angle
 
-        intersections, distances = self.ray_cast.scan(self.agent_pos, self.walls, self.facing_direction)
+        intersections, distances = self.ray_cast.scan(self.agent_pos, self.facing_direction)
 
         obs = self.get_observations(intersections, distances)
 
