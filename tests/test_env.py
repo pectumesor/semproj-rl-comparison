@@ -15,22 +15,21 @@ from algorithms import RolloutBuffer, MLPPPO
 
 #Env
 from envs import NavigationEnv, compute_num_rays
-from gymnasium.vector import AsyncVectorEnv
-
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-   
-def make_env(cfg, agent, num_rays, obs_dim):
-        def _init():
-            return NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=obs_dim)
-        return _init
+device = torch.device( "mps" if torch.backends.mps.is_available() 
+                      else "cuda" if torch.cuda.is_available()
+                      else "cpu" )
+
+print(f"Using device: {device}")
 
 @hydra.main( config_path="../configs", config_name="base", version_base=None)
 def main(cfg: DictConfig):
+
 
     num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
     num_classes = cfg.env.num_classes
@@ -58,7 +57,7 @@ def main(cfg: DictConfig):
     
     agent = BaseAgent(obs_embed_model=observation_model,
                       backbone_model=backbone_model,
-                      actor=actor, critic=crtic)
+                      actor=actor, critic=crtic).to(device)
     
     buffer = RolloutBuffer(obs_dim=obs_dim,
                            act_dim=cfg.env.act_dim,
@@ -66,14 +65,14 @@ def main(cfg: DictConfig):
                            num_envs=cfg.env.num_envs,
                            gamma=cfg.env.gamma,
                            gae_lambda=cfg.algorithms.gae_lambda,
-                           device=cfg.env.device)
+                           device=device)
  
 
-    env = AsyncVectorEnv([make_env(cfg, agent, num_rays, obs_dim) for _ in range(cfg.env.num_envs)])
-    eval_env = AsyncVectorEnv([make_env(cfg, agent, num_rays, obs_dim)])
+    env      = NavigationEnv(cfg, agent, num_rays, obs_dim, cfg.env.num_envs, device=device)
+    eval_env = NavigationEnv(cfg, agent, num_rays, obs_dim, 1,               device=device)
     
     algorithm = MLPPPO(buffer=buffer,
-                       device=cfg.env.device,
+                       device=device,
                        env=env,
                        lr=cfg.model.lr,
                        n_iterations=cfg.env.n_iterations,

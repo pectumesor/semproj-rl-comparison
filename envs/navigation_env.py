@@ -1,29 +1,68 @@
-import gymnasium as gym
 import torch
-import torch.nn as nn
 import numpy as np
-from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends 
+import gymnasium as gym
 from omegaconf import DictConfig
+from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends
 
 
 
 class NavigationEnv(gym.Env):
+    """
+    Vectorized navigation environment.
 
-    def __init__(self, cfg: DictConfig, agent: nn.Module, num_rays: int, obs_dim):
-        metadata = {"render_modes": ["human"], "render_fps": 10}
+    All state is stored as on-device tensors. reset() and step() return tensors.
 
-        super().__init__()
+    Observation per env: (4, num_rays)
+        channel 0 — no_hit indicator
+        channel 1 — goal_hit indicator
+        channel 2 — wall_hit indicator
+        channel 3 — normalised distance [0, 1]
 
-        self.act_dim = cfg.env.act_dim
-        self.obs_dim = obs_dim
+    Action: (num_envs, 2)
+        [:, 0] turning in [-1, 1]  →  ±half_fov radians
+        [:, 1] speed   in [-1, 1]  →  ±max_speed
+    """
+
+    def __init__(
+        self,
+        cfg: DictConfig,
+        agent,
+        num_rays: int,
+        obs_dim: tuple,
+        num_envs: int,
+        device: str = "cpu",
+    ):
+        self.obs_dim   = obs_dim
+        self.act_dim   = cfg.env.act_dim
         self.max_speed = cfg.env.max_speed
-        self.fov = cfg.env.fov
+        self.fov       = cfg.env.fov
         self.max_steps = cfg.env.max_steps
-        self.initial_pos = np.array([cfg.env.init_pos["x"],
-                                     cfg.env.init_pos["y"]])
-        self.goal_pos = np.array([cfg.env.goal_pos["x"],
-                                  cfg.env.goal_pos["y"]])
-        self.num_rays = num_rays
+        self.num_rays  = num_rays
+        self.num_envs  = num_envs
+        self.device    = device
+        self.agent     = agent
+
+        self._half_fov_rad = float(np.deg2rad(self.fov / 2.0))
+
+        self.initial_pos = torch.tensor(
+            [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
+            dtype=torch.float32, device=device,
+        )
+        self.goal_pos = torch.tensor(
+            [cfg.env.goal_pos["x"], cfg.env.goal_pos["y"]],
+            dtype=torch.float32, device=device,
+        )
+
+        walls = walls_json_to_numpy(cfg.env.room_path)
+        ws_np, we_np = compute_starts_and_ends(walls)
+        wall_starts = torch.tensor(ws_np, dtype=torch.float32, device=device)
+        wall_ends   = torch.tensor(we_np, dtype=torch.float32, device=device)
+        self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays).to(device)
+
+        # Mutable state
+        self.agent_pos        = torch.zeros(num_envs, 2, dtype=torch.float32, device=device)
+        self.facing_direction = torch.zeros(num_envs,    dtype=torch.float32, device=device)
+        self.steps            = torch.zeros(num_envs,    dtype=torch.long,    device=device)
 
         """
         
@@ -40,7 +79,7 @@ class NavigationEnv(gym.Env):
             low=0.0,
             high=1.0,
             dtype=np.float32,
-            shape=self.obs_dim if isinstance(self.obs_dim, tuple) else (self.obs_dim,)
+            shape=self.obs_dim
         )
 
         """
@@ -63,101 +102,71 @@ class NavigationEnv(gym.Env):
             dtype=np.float32
         )
 
-        self.walls = walls_json_to_numpy(cfg.env.room_path)
-        self.agent = agent
 
-        # Agent variables
-        wall_starts, wall_ends = compute_starts_and_ends(self.walls)
-        self.ray_cast = RayCast(cfg, wall_starts, wall_ends, self.num_rays)
-        self.facing_direction = np.pi / 2
-        self.agent_pos = self.initial_pos
-       
-        self.steps = 0
+    def reset(self, seed=None, options=None, done: torch.Tensor = None):
+        """
+        done: bool tensor (num_envs,) — reset only those envs. None resets all.
+        Returns (obs, {}) where obs is (num_envs, 4, num_rays) on device.
+        """
+        mask = (torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+                if done is None else done)
 
-
-    def reset(self, seed=None, options=None):
-        # TODO: Implement
-        super().reset(seed=seed)
-        
-        self.facing_direction = np.pi / 2
-        self.agent_pos = self.initial_pos
-
-        intersections, distances = self.ray_cast.scan(
-            self.agent_pos, self.facing_direction)
-        
-        obs = self.get_observations(intersections, distances)
-
-        return obs, {}
-
-    def get_observations(self, intersections, distances):
-
-        list = []
-        max_range = self.ray_cast.max_range
-
-
-        for i in range(len(distances)):
-
-            if distances[i] == np.inf:
-                list.append(np.array([1,0,0,max_range]))
-            elif distances[i] < np.inf and (
-                np.linalg.norm(intersections[i] - self.goal_pos) <= 1e-4
-            ):
-                list.append(np.array([0,1,0,distances[i]]))
-            else:
-                list.append(np.array([0,0,1,distances[i]]))
-        
-
-        obs = np.stack(list, axis=-1)
-
-        return obs
-    
-    def compute_rewards(self, done):
-
-        reward = -(1.0 / self.max_steps)
-
-        if done:
-            reward += 1
-        
-        return reward
-                
-    def step(self, action):
-
-        done = False
-        truncated = False
-
-        self.steps += 1
-
-        if self.steps >= self.max_steps:
-            self.steps = 0
-            truncated = True
-
-        turning_angle = action[0] * self.fov
-        velocity = action[1] * self.max_speed
-
-        self.agent_pos += velocity
-        self.facing_direction += turning_angle
+        self.agent_pos[mask]        = self.initial_pos
+        self.facing_direction[mask] = np.pi / 2
+        self.steps[mask]            = 0
 
         intersections, distances = self.ray_cast.scan(self.agent_pos, self.facing_direction)
+        return self.get_observations(intersections, distances), {}
 
+
+    def step(self, action: torch.Tensor):
+        """
+        action: (num_envs, 2) tensor on device.
+        Returns obs, reward, terminated, truncated, info — all tensors on device.
+        """
+        self.steps += 1
+        truncated = self.steps >= self.max_steps
+        self.steps[truncated] = 0
+
+        turning = action[:, 0] * self._half_fov_rad
+        speed   = action[:, 1] * self.max_speed
+
+        dx = speed * torch.cos(self.facing_direction)
+        dy = speed * torch.sin(self.facing_direction)
+        self.agent_pos        += torch.stack([dx, dy], dim=-1)
+        self.facing_direction += turning
+
+        intersections, distances = self.ray_cast.scan(self.agent_pos, self.facing_direction)
         obs = self.get_observations(intersections, distances)
 
-        if np.linalg.norm(self.agent_pos - self.goal_pos) <= 1e-4:
-            done = True
-        
-        reward = self.compute_rewards(done)
+        dist_to_goal = torch.norm(self.agent_pos - self.goal_pos, dim=-1)
+        terminated = dist_to_goal <= 1e-4
 
-        info = {
-            "Facing Direction": self.facing_direction,
-            "Current Position": self.agent_pos,
-            "Last Turning Angle": turning_angle,
-            "Last Velocity": velocity 
-        }
+        reward = torch.full(
+            (self.num_envs,), -1.0 / self.max_steps,
+            dtype=torch.float32, device=self.device,
+        )
+        reward[terminated] += 1.0
 
-        return obs, reward, done, truncated, info
+        return obs, reward, terminated, truncated, {}
 
 
+    def get_observations(
+        self, intersections: torch.Tensor, distances: torch.Tensor
+    ) -> torch.Tensor:
+        max_range = self.ray_cast.max_range
 
+        no_hit   = torch.isinf(distances)
+        hit      = ~no_hit
+        dist_to_goal = torch.norm(intersections - self.goal_pos[None, None, :], dim=-1)
+        goal_hit = hit & (dist_to_goal <= 1e-4)
+        wall_hit = hit & ~goal_hit
 
+        obs = torch.zeros(self.num_envs, 4, self.num_rays,
+                          dtype=torch.float32, device=self.device)
+        obs[:, 0, :] = no_hit.float()
+        obs[:, 1, :] = goal_hit.float()
+        obs[:, 2, :] = wall_hit.float()
+        obs[:, 3, :] = torch.where(no_hit, torch.ones_like(distances), distances / max_range)
 
-
-
+        return obs

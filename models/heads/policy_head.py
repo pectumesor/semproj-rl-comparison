@@ -42,7 +42,7 @@ class GuassianPolicyHead(nn.Module):
         """
 
         mean = self.mu(backbone_feats)
-        std = torch.exp(self.log_std).expand_as(mean)
+        std = torch.exp(self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX)).expand_as(mean)
         self.distribution = Normal(mean, std)
 
     

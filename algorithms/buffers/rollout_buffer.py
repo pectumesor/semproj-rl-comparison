@@ -16,7 +16,7 @@ class RolloutBatch:
 class RolloutBuffer:
     def __init__(
             self,
-            obs_dim: int | tuple,
+            obs_dim: tuple,
             act_dim: int,
             num_steps: int,
             num_envs: int,
@@ -25,8 +25,7 @@ class RolloutBuffer:
             device: torch.device,
             ):
         
-        obs_shape = obs_dim if isinstance(obs_dim, tuple) else (obs_dim,)
-        self.obs_buf = torch.zeros((num_steps, num_envs, *obs_shape), dtype=torch.float, device=device)
+        self.obs_buf = torch.zeros((num_steps, num_envs, *obs_dim), dtype=torch.float, device=device)
         self.act_buf = torch.zeros((num_steps, num_envs, act_dim), dtype=torch.float, device=device)
         self.logp_buf = torch.zeros((num_steps, num_envs), dtype=torch.float, device=device)
         self.mu_buf = torch.zeros((num_steps, num_envs, act_dim), dtype=torch.float, device=device)

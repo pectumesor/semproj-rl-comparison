@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer
 import torch.optim as optim
 import gymnasium as gym
+from tqdm import tqdm
 
 from models.agents import BaseAgent, RecurrentAgent
 
@@ -100,22 +101,20 @@ class MLPPPO(PPO):
 
 
     def collect_rollout(self, obs: torch.Tensor, done: torch.Tensor):
-        # AsyncVectorEnv auto-resets finished envs; next_obs already contains the fresh obs for done envs.
-        for _ in range(self.buffer.num_steps):
-            action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
-            next_obs_np, reward, terminated, truncated, info = self.env.step(action.cpu().numpy())
 
-            next_obs = torch.as_tensor(next_obs_np, dtype=torch.float, device=self.device)
-            reward = torch.as_tensor(reward, dtype=torch.float, device=self.device)
-            terminated = torch.as_tensor(terminated, dtype=torch.bool, device=self.device)
-            truncated = torch.as_tensor(truncated, dtype=torch.bool, device=self.device)
+        for _ in range(self.buffer.num_steps):
+
+            new_obs, _ = self.env.reset(done=done)
+            obs[done]  = new_obs[done]
+
+            action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
+            next_obs, reward, terminated, truncated, info = self.env.step(action)
             done = terminated | truncated
 
             # Bootstrap value for timed-out episodes to avoid treating timeout as a true terminal
-            if truncated.any():
-                with torch.no_grad():
-                    bootstrap_val = self.agent.get_value(next_obs)
-                reward[truncated] += self.gamma * bootstrap_val[truncated]
+            with torch.no_grad():
+                bootstrap_val = self.agent.get_value(next_obs)
+            reward += self.gamma * bootstrap_val * truncated.float()
 
             self.buffer.store(
                 obs=obs,
@@ -231,6 +230,7 @@ class MLPPPO(PPO):
 
             self.optimizer.zero_grad()
             loss.backward()
+            nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=0.5)
             self.optimizer.step()
 
             mean_kl += kl.item()
@@ -270,12 +270,11 @@ class MLPPPO(PPO):
                 episode_length = 0
 
                 while not done:
-                    obs_t = torch.as_tensor(obs, dtype=torch.float, device=self.device)
-                    action = self.agent.predict_action(obs_t)
-                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action.cpu().numpy())
+                    action = self.agent.predict_action(obs)
+                    next_obs, reward, terminated, truncated, _ = self.eval_env.step(action)
 
                     obs = next_obs
-                    episode_return += float(reward[0])
+                    episode_return += reward[0].item()
                     episode_length += 1
                     done = bool(terminated[0]) or bool(truncated[0])
 
@@ -289,10 +288,9 @@ class MLPPPO(PPO):
 
         self.agent.train()
         obs, _ = self.env.reset()
-        obs = torch.as_tensor(obs, dtype=torch.float, device=self.device)
         done = torch.zeros(self.buffer.num_envs, dtype=torch.bool, device=self.device)
 
-        for iter in range(self.n_iterations):
+        for iter in tqdm(range(self.n_iterations), desc="Training"):
 
             obs, done = self.collect_rollout(obs, done)
             stats = self.update()
@@ -317,8 +315,11 @@ class RecuurentPPO(MLPPPO):
 
     
     def collect_rollout(self, obs: torch.Tensor, lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
-
-        for _ in range(self.buffer.num_steps):
+        
+        rollout_bar = tqdm(iterable=range(self.buffer.num_steps), total=self.buffer.num_steps,
+                           desc="Colleting Rollouts")
+        
+        for _ in rollout_bar:
             action, action_log_prob, action_mu, action_std, value, lstm_state = self.agent.select_action(obs, lstm_state, done)
             next_obs_np, reward, terminated, truncated, info = self.env.step(action.cpu().numpy())
 
@@ -415,6 +416,7 @@ class RecuurentPPO(MLPPPO):
 
             self.optimizer.zero_grad()
             loss.backward()
+            nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=0.5)
             self.optimizer.step()
 
             mean_kl += kl.item()
@@ -492,7 +494,10 @@ class RecuurentPPO(MLPPPO):
         # Carry hidden state across rollouts for inference; re-init to zeros for each update pass
         rollout_lstm_state = initial_lstm_state
 
-        for iter in range(self.n_iterations):
+        iterations_bar = tqdm(iterable=range(self.n_iterations), total=self.n_iterations, 
+                              desc="Training PPO")
+
+        for iter in iterations_bar:
 
             obs, rollout_lstm_state, done = self.collect_rollout(obs, rollout_lstm_state, done)
             stats = self.update(initial_lstm_state)

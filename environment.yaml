@@ -27,6 +27,7 @@ dependencies:
   - matplotlib
   - seaborn
   - pip:
+    - tqdm
     - opencv-python-headless 
 
   # Dev

@@ -7,7 +7,7 @@ wandb:
 
 model:
   lr: 0.001
-  batch_size: 32
+  batch_size: 256
   obs_embed_hidden_sizes: [64, 64]
   backbone_hidden_sizes: [64, 64]
   policy_hidden_sizes: [64, 64]
@@ -16,7 +16,6 @@ model:
 env:
   name: "NavEnv"
   room_path: "rooms/test_room.json"
-  device: "cpu"
 
   num_classes: 3
   act_dim: 2
@@ -29,11 +28,11 @@ env:
   goal_pos: {"x": 10.0, "y": 10.0}
 
 
-  n_iterations: 10000
-  max_steps: 1000
-  num_steps: 100
-  num_envs: 10
-  n_epochs: 10
+  n_iterations: 1000
+  max_steps: 2048
+  num_steps: 1024
+  num_envs: 2048
+  n_epochs: 5
   train_freq: 10
   gamma: 0.9
 
