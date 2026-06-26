@@ -298,6 +298,17 @@ class MLPPPO(PPO):
             iteration = iter + 1
 
             # TODO: Logging stats and evaluation on wandb
+            print(
+            f"[PPO] iteration={iteration}/{self.n_iterations} "
+            f"step={self.buffer.num_steps * iteration} "
+            f"global_std={self.agent.actor.action_std.mean().item():.4f} "
+            f"mean_kl={stats.mean_kl:.4f} "
+            f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
+            f"mean_value_loss={stats.mean_value_loss:.4f} "
+            f"mean_entropy={stats.mean_entropy:.4f} "
+            f"eval_return={mean_eval_return:.4f} "
+            f"eval_length={mean_eval_length:.2f}"
+        )
 
 class RecuurentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
@@ -505,3 +516,15 @@ class RecuurentPPO(MLPPPO):
             iteration = iter + 1
 
             # TODO: Logging stats and evaluation on wandb
+
+            print(
+            f"[PPO] iteration={iteration}/{self.n_iterations} "
+            f"step={self.buffer.num_steps * iteration} "
+            f"global_std={self.agent.actor.action_std.mean().item():.4f} "
+            f"mean_kl={stats.mean_kl:.4f} "
+            f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
+            f"mean_value_loss={stats.mean_value_loss:.4f} "
+            f"mean_entropy={stats.mean_entropy:.4f} "
+            f"eval_return={mean_eval_return:.4f} "
+            f"eval_length={mean_eval_length:.2f}"
+        )

@@ -43,6 +43,8 @@ class NavigationEnv(gym.Env):
         self.agent     = agent
 
         self._half_fov_rad = float(np.deg2rad(self.fov / 2.0))
+        self.goal_radius  = float(cfg.env.get("goal_radius", 1e-4))
+        self.dense_reward = bool(cfg.env.get("dense_reward", False))
 
         self.initial_pos = torch.tensor(
             [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
@@ -63,6 +65,7 @@ class NavigationEnv(gym.Env):
         self.agent_pos        = torch.zeros(num_envs, 2, dtype=torch.float32, device=device)
         self.facing_direction = torch.zeros(num_envs,    dtype=torch.float32, device=device)
         self.steps            = torch.zeros(num_envs,    dtype=torch.long,    device=device)
+        self.prev_dist        = torch.zeros(num_envs,    dtype=torch.float32, device=device)
 
         """
         
@@ -116,6 +119,7 @@ class NavigationEnv(gym.Env):
         self.steps[mask]            = 0
 
         intersections, distances = self.ray_cast.scan(self.agent_pos, self.facing_direction)
+        self.prev_dist = torch.norm(self.agent_pos - self.goal_pos, dim=-1)
         return self.get_observations(intersections, distances), {}
 
 
@@ -140,14 +144,17 @@ class NavigationEnv(gym.Env):
         obs = self.get_observations(intersections, distances)
 
         dist_to_goal = torch.norm(self.agent_pos - self.goal_pos, dim=-1)
-        terminated = dist_to_goal <= 1e-4
+        terminated = dist_to_goal <= self.goal_radius
 
         reward = torch.full(
             (self.num_envs,), -1.0 / self.max_steps,
             dtype=torch.float32, device=self.device,
         )
+        if self.dense_reward:
+            reward += (self.prev_dist - dist_to_goal) / (self.ray_cast.max_range * self.max_steps)
         reward[terminated] += 1.0
 
+        self.prev_dist = dist_to_goal
         return obs, reward, terminated, truncated, {}
 
 
