@@ -43,47 +43,145 @@ class RayCast:
         self._ray_offsets = self._ray_offsets.to(device)
         return self
 
-    def scan(self, positions: torch.Tensor, facing_directions: torch.Tensor):
+    def intersect(self, positions: torch.Tensor, d: torch.Tensor):
         """
-        positions:         (E, 2)
-        facing_directions: (E,)
+        Shared ray-wall intersection kernel.
+
+        positions: (E, 2)
+        d:         (E, R, 2)  ray vectors (not necessarily unit; length = max travel)
+
         Returns:
-            intersections: (E, R, 2)   — position of closest wall hit per ray (origin for misses)
-            distances:     (E, R)      — inf when no wall hit
+            min_t:  (E, R)  in [0,1] fraction of |d| to closest wall; inf = no hit
         """
-        # Ray directions
-        angles = facing_directions[:, None] + self._ray_offsets[None, :]   # (E, R)
-        d = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1) * self.max_range
-        # d: (E, R, 2)
+        r = self._r                                              # (W, 2)
+        e = self.wall_starts[None, :, :] - positions[:, None, :]  # (E, W, 2)
 
-        r = self._r                                                          # (W, 2)
-        e = self.wall_starts[None, :, :] - positions[:, None, :]           # (E, W, 2)
-
-        # e_cross_r[E, W] — same for every ray of an env
-        e_cross_r = _cross2d(e, r[None, :, :])[:, None, :]                 # (E, 1, W)
+        e_cross_r = _cross2d(e, r[None, :, :])[:, None, :]     # (E, 1, W)
 
         d_exp = d[:, :, None, :]        # (E, R, 1, 2)
         r_exp = r[None, None, :, :]     # (1, 1, W, 2)
         e_exp = e[:, None, :, :]        # (E, 1, W, 2)
 
-        d_cross_r = _cross2d(d_exp, r_exp) + 1e-8   # (E, R, W)
-        e_cross_d = _cross2d(e_exp, d_exp)           # (E, R, W)
+        d_cross_r = _cross2d(d_exp, r_exp) + 1e-8  # (E, R, W)
+        e_cross_d = _cross2d(e_exp, d_exp)          # (E, R, W)
 
-        t = e_cross_r / d_cross_r   # (E, R, W)
-        s = e_cross_d / d_cross_r   # (E, R, W)
+        t = e_cross_r / d_cross_r  # (E, R, W)
+        s = e_cross_d / d_cross_r  # (E, R, W)
 
         hit    = (t >= 0) & (t <= 1.0) & (s >= 0) & (s <= 1.0)
         t_hits = torch.where(hit, t, torch.full_like(t, float('inf')))
-        min_t, _ = t_hits.min(dim=-1)                                       # (E, R)
+        min_t, _ = t_hits.min(dim=-1)  # (E, R)
+        return min_t
 
+    def scan(self, positions: torch.Tensor, facing_directions: torch.Tensor):
+        """
+        positions:         (E, 2)
+        facing_directions: (E,)
+        Returns:
+            intersections: (E, R, 2)   — global hit position; ray endpoint at max_range for misses
+            distances:     (E, R)      — inf when no wall hit
+            d_unit:        (E, R, 2)   — unit ray directions (reuse in get_observations)
+        """
+        angles = facing_directions[:, None] + self._ray_offsets[None, :]        # (E, R)
+        d_unit = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)    # (E, R, 2)
+        d      = d_unit * self.max_range
+
+        min_t = self.intersect(positions, d)                                     # (E, R)
         distances = min_t * self.max_range
 
-        # Clamp inf to 0 before multiply to avoid nan (no-hit rays get origin; masked out later)
-        min_t_safe = min_t.masked_fill(torch.isinf(min_t), 0.0)
-        intersections = positions[:, None, :] + min_t_safe[:, :, None] * d # (E, R, 2)
+        min_t_safe   = min_t.masked_fill(torch.isinf(min_t), 1.0)
+        intersections = positions[:, None, :] + min_t_safe[:, :, None] * d      # (E, R, 2)
 
-        return intersections, distances
+        return intersections, distances, d_unit
 
+
+
+class PerlinColor:
+    """
+    Continuous, pointwise-queryable Perlin color field for state disambiguation.
+
+    Produces 3 decorrelated noise channels → an RGB color that is spatially
+    coherent (nearby points → similar color) but decorrelated across the map
+    (far-apart points → independent color). Same field every call given a fixed
+    seed, so colors carry stable spatial information the policy can learn.
+
+    Query at any continuous (x, y); shapes broadcast, so (E, R) hit coords in,
+    (E, R, 3) RGB out.
+    """
+
+    def __init__(self, seed=0, scale=0.15, octaves=4,
+                 persistence=0.5, lacunarity=2.0, device="cpu"):
+        self.scale = scale
+        self.octaves = octaves
+        self.persistence = persistence
+        self.lacunarity = lacunarity
+        self.device = device
+
+        # 3 decorrelated permutation tables (different seeds, large stride apart)
+        self.perms = []
+        for i in range(3):
+            g = torch.Generator(device="cpu").manual_seed(seed + i * 7919)
+            p = torch.randperm(256, generator=g)
+            p = torch.cat([p, p]).to(device)          # 512, avoids wrap masking
+            self.perms.append(p)
+
+    @staticmethod
+    def _fade(t):
+        return t * t * t * (t * (t * 6 - 15) + 10)    # quintic smoothstep
+
+    @staticmethod
+    def _lerp(a, b, t):
+        return a + t * (b - a)
+
+    @staticmethod
+    def _grad(h, x, y):
+        # 8 gradient directions from low 3 bits of the hash
+        h = h & 7
+        u = torch.where(h < 4, x, y)
+        v = torch.where(h < 4, y, x)
+        return (torch.where((h & 1) == 0, u, -u) +
+                torch.where((h & 2) == 0, v, -v))
+
+    def _noise(self, perm, x, y):
+        # x, y: arbitrary shape, float. Returns same shape in ~[-1, 1].
+        xi = torch.floor(x).long() & 255
+        yi = torch.floor(y).long() & 255
+        xf = x - torch.floor(x)
+        yf = y - torch.floor(y)
+
+        u = self._fade(xf)
+        v = self._fade(yf)
+
+        # hash the 4 lattice corners
+        aa = perm[perm[xi]     + yi]
+        ab = perm[perm[xi]     + yi + 1]
+        ba = perm[perm[xi + 1] + yi]
+        bb = perm[perm[xi + 1] + yi + 1]
+
+        x1 = self._lerp(self._grad(aa, xf,     yf),
+                        self._grad(ba, xf - 1, yf),     u)
+        x2 = self._lerp(self._grad(ab, xf,     yf - 1),
+                        self._grad(bb, xf - 1, yf - 1), u)
+        return self._lerp(x1, x2, v)
+
+    def _fbm(self, perm, x, y):
+        freqs = self.lacunarity ** torch.arange(self.octaves, dtype=torch.float32, device=x.device)
+        amps  = self.persistence ** torch.arange(self.octaves, dtype=torch.float32, device=x.device)
+        s = (-1,) + (1,) * x.dim()
+        vals = self._noise(perm, x.unsqueeze(0) * freqs.view(s),
+                                 y.unsqueeze(0) * freqs.view(s))   # (O, *shape)
+        return (vals * amps.view(s)).sum(0) / amps.sum()            # ~[-1, 1]
+
+    def __call__(self, x, y):
+        """
+        x, y: float tensors of identical shape, e.g. (E, R) hit coordinates.
+        Returns RGB in [0, 1] with a trailing channel dim, e.g. (E, R, 3).
+        """
+        x = (x * self.scale).to(self.device)
+        y = (y * self.scale).to(self.device)
+        chans = [self._fbm(p, x, y) for p in self.perms]   # 3 × (E, R)
+        rgb = torch.stack(chans, dim=-1)                   # (E, R, 3)
+        return (rgb + 1.0) * 0.5                            # → [0, 1]
 
 # ---------------------------------------------------------------------------
 # Utility functions (numpy — used only at startup to load room geometry)

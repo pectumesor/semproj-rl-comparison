@@ -11,8 +11,6 @@ from tqdm import tqdm
 
 from models.agents import BaseAgent, RecurrentAgent
 
-
-
 @dataclass
 class PPOUpdateStats:
     mean_kl: float
@@ -67,7 +65,7 @@ class MLPPPO(PPO):
                 buffer: RolloutBuffer, device: torch.device, env: gym.Env, lr: float,
                 n_iterations: int, mini_batch: int, n_epochs: int,
                 agent: BaseAgent | RecurrentAgent, gamma: float, gae_lambda: float, clip_epsilon: float, entropy_coeff: float,
-                val_coeff: float, aux_coeff: float, task_coeff: float, intr_coeff: float,
+                val_coeff: float, aux_coeff: float, task_coeff: float, intr_coeff: float, save_interval: int,
                 eval_env: Optional[gym.Env] = None
                 ):
         super().__init__()
@@ -82,6 +80,7 @@ class MLPPPO(PPO):
         self.n_iterations = n_iterations
         self.mini_batch = mini_batch
         self.n_epochs = n_epochs
+        self.save_interval = save_interval
 
         # -- Architecture --
         self.agent = agent
@@ -100,18 +99,22 @@ class MLPPPO(PPO):
         self.optimizer = optim.Adam(params=self.agent.parameters(), lr=self.lr)
 
 
-    def collect_rollout(self, obs: torch.Tensor, done: torch.Tensor):
+    def collect_rollout(self, obs: dict, done: torch.Tensor):
 
         for _ in range(self.buffer.num_steps):
 
             new_obs, _ = self.env.reset(done=done)
-            obs[done]  = new_obs[done]
+            obs["rays"][done]    = new_obs["rays"][done]
+            obs["proprio"][done] = new_obs["proprio"][done]
 
             action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
-            next_obs, reward, terminated, truncated, info = self.env.step(action)
+            clipped_action = action.clamp(
+                torch.tensor(self.env.action_space.low,  dtype=torch.float32, device=self.device),
+                torch.tensor(self.env.action_space.high, dtype=torch.float32, device=self.device),
+            )
+            next_obs, reward, terminated, truncated, info = self.env.step(clipped_action)
             done = terminated | truncated
 
-            # Bootstrap value for timed-out episodes to avoid treating timeout as a true terminal
             with torch.no_grad():
                 bootstrap_val = self.agent.get_value(next_obs)
             reward += self.gamma * bootstrap_val * truncated.float()
@@ -133,37 +136,40 @@ class MLPPPO(PPO):
             last_val = self.agent.get_value(obs)
         self.buffer.compute_returns(last_val)
 
-        return obs, done
+        return obs, done, info
 
     def sample_mini_batch(self, batch: RolloutBatch):
         total_samples = self.buffer.num_steps * self.buffer.num_envs
 
-        flat_obs = batch.obs.reshape(total_samples, -1)
-        flat_act = batch.act.reshape(total_samples, -1)
-        flat_logp = batch.logp.reshape(total_samples)
-        flat_mu = batch.mu.reshape(total_samples, -1)
-        flat_std = batch.std.reshape(total_samples, -1)
-        flat_val = batch.val.reshape(total_samples)
-        flat_ret = batch.ret.reshape(total_samples)
-        flat_adv = batch.adv.reshape(total_samples)
-        flat_done = batch.done.reshape(total_samples)
+        # rays: (T, E, C, R) → (T*E, C, R); proprio: (T, E, 4) → (T*E, 4)
+        flat_rays    = batch.rays.reshape(total_samples, *batch.rays.shape[2:])
+        flat_proprio = batch.proprio.reshape(total_samples, -1)
+        flat_act     = batch.act.reshape(total_samples, -1)
+        flat_logp    = batch.logp.reshape(total_samples)
+        flat_mu      = batch.mu.reshape(total_samples, -1)
+        flat_std     = batch.std.reshape(total_samples, -1)
+        flat_val     = batch.val.reshape(total_samples)
+        flat_ret     = batch.ret.reshape(total_samples)
+        flat_adv     = batch.adv.reshape(total_samples)
+        flat_done    = batch.done.reshape(total_samples)
 
         for _ in range(self.n_epochs):
             indices = torch.randperm(total_samples, requires_grad=False, device=self.device)
 
             for start in range(0, total_samples, self.mini_batch):
                 end = start + self.mini_batch
-                batch_indices = indices[start:end]
+                idx = indices[start:end]
                 yield RolloutBatch(
-                    obs=flat_obs[batch_indices],
-                    act=flat_act[batch_indices],
-                    logp=flat_logp[batch_indices],
-                    mu=flat_mu[batch_indices],
-                    std=flat_std[batch_indices],
-                    val=flat_val[batch_indices],
-                    ret=flat_ret[batch_indices],
-                    adv=flat_adv[batch_indices],
-                    done=flat_done[batch_indices]
+                    rays=flat_rays[idx],
+                    proprio=flat_proprio[idx],
+                    act=flat_act[idx],
+                    logp=flat_logp[idx],
+                    mu=flat_mu[idx],
+                    std=flat_std[idx],
+                    val=flat_val[idx],
+                    ret=flat_ret[idx],
+                    adv=flat_adv[idx],
+                    done=flat_done[idx],
                 )
 
     def compute_surrogate_loss(self, logp_batch, old_logp_batch, adv_batch):
@@ -209,14 +215,14 @@ class MLPPPO(PPO):
 
         for mini_batch in self.sample_mini_batch(rollout_batch):
 
-            obs_batch = mini_batch.obs
-            act_batch = mini_batch.act
+            obs_batch      = {"rays": mini_batch.rays, "proprio": mini_batch.proprio}
+            act_batch      = mini_batch.act
             old_logp_batch = mini_batch.logp
-            old_mu_batch = mini_batch.mu
-            old_std_batch = mini_batch.std
-            old_val_batch = mini_batch.val
-            ret_batch = mini_batch.ret
-            adv_batch = mini_batch.adv
+            old_mu_batch   = mini_batch.mu
+            old_std_batch  = mini_batch.std
+            old_val_batch  = mini_batch.val
+            ret_batch      = mini_batch.ret
+            adv_batch      = mini_batch.adv
 
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.agent.evaluate_actions(obs_batch, act_batch)
            
@@ -284,7 +290,7 @@ class MLPPPO(PPO):
         self.agent.train()
         return float(np.mean(returns)), float(np.mean(lengths))
 
-    def train(self):
+    def train(self, run_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
@@ -292,7 +298,7 @@ class MLPPPO(PPO):
 
         for iter in tqdm(range(self.n_iterations), desc="Training"):
 
-            obs, done = self.collect_rollout(obs, done)
+            obs, done, info = self.collect_rollout(obs, done)
             stats = self.update()
             mean_eval_return, mean_eval_length = self.evaluate_policy()
             iteration = iter + 1
@@ -300,7 +306,7 @@ class MLPPPO(PPO):
             # TODO: Logging stats and evaluation on wandb
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
-            f"step={self.buffer.num_steps * iteration} "
+            f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
             f"global_std={self.agent.actor.action_std.mean().item():.4f} "
             f"mean_kl={stats.mean_kl:.4f} "
             f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
@@ -308,7 +314,16 @@ class MLPPPO(PPO):
             f"mean_entropy={stats.mean_entropy:.4f} "
             f"eval_return={mean_eval_return:.4f} "
             f"eval_length={mean_eval_length:.2f}"
+            #f"agent_pos={info['agent_pos']}"
+            #f"last_turning={info['last_turning']}"
+           # f"last_speed={info['last_speed']}"
         )
+            if run_dir is not None:
+                if iteration % self.save_interval == 0 or iteration == self.n_iterations:
+                    model_path = run_dir / f"iter_{iteration}.pt"
+                    self.agent.save_model(model_path, self.optimizer)
+
+    
 
 class RecuurentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
@@ -488,7 +503,7 @@ class RecuurentPPO(MLPPPO):
         self.agent.train()
         return float(np.mean(returns)), float(np.mean(lengths))
 
-    def train(self):
+    def train(self, save_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
@@ -516,10 +531,9 @@ class RecuurentPPO(MLPPPO):
             iteration = iter + 1
 
             # TODO: Logging stats and evaluation on wandb
-
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
-            f"step={self.buffer.num_steps * iteration} "
+            f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
             f"global_std={self.agent.actor.action_std.mean().item():.4f} "
             f"mean_kl={stats.mean_kl:.4f} "
             f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
@@ -528,3 +542,8 @@ class RecuurentPPO(MLPPPO):
             f"eval_return={mean_eval_return:.4f} "
             f"eval_length={mean_eval_length:.2f}"
         )
+            
+            if save_dir is not None:
+                if iteration % self.save_interval == 0 or iteration == self.n_iterations:
+                    model_path = save_dir / f"iter_{iteration}.pt"
+                    self.agent.save_model(model_path, self.optimizer)

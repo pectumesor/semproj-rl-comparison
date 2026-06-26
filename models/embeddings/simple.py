@@ -1,47 +1,58 @@
 from typing import Sequence
 import torch
 import torch.nn as nn
-from ..network_utils import build_mlp, build_cnn
+from ..network_utils import build_mlp, build_cnn1d
+
 
 class MLPObservationEmbeddings(nn.Module):
     """
-    Simple MLP to extract information from agent observations and feed it to the policy backbone
+    Flattens the dict observation (rays + proprio) into a single vector and passes it through an MLP.
+
+    input_dim must equal 7 * num_rays + proprio_dim (4).
     """
 
-    def __init__(self,
-                 input_dim: int,
-                 hidden_sizes: Sequence[int],
-                 feature_dim: int):
+    def __init__(self, input_dim: int, hidden_sizes: Sequence[int], feature_dim: int):
         super().__init__()
-
         self.net = build_mlp(input_dim, hidden_sizes, feature_dim)
 
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-
-        """
-        obs will have dim: (B, obs_dim), where obs_dim is num_classes + 1 x num_rays.
-
-        For a MLP observation embedding we need to flatten it first
-        """
-
-        x = obs.flatten(1) # Shape: (B, (num_classes + 1) * num_rays )
+    def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
+        # rays:   (B, num_channels, num_rays)
+        # proprio:(B, 4)
+        x = torch.cat([rays.flatten(1), proprio], dim=-1)
         return self.net(x)
 
 
 class CNNObservationEmbeddings(nn.Module):
-
     """
-    Simple MLP Vision Module to extract information from agent observations and feed it to the policy backbone
+    Processes the dict observation with two separate streams:
+      - rays   → 1-D CNN  → feature vector
+      - proprio → small MLP → feature vector
+    The two vectors are concatenated and projected to feature_dim.
+
+    Args:
+        ray_channels:         input channels of the ray matrix (7 for current env)
+        cnn_out_channels:     output channels of the 1-D CNN
+        proprio_dim:          length of the proprio vector (4)
+        proprio_hidden_sizes: hidden sizes for the proprio MLP
+        feature_dim:          output dimension after fusion
     """
 
-    def __init__(self,
-                input_channels,
-                output_channels
-                ):
+    def __init__(
+        self,
+        ray_channels: int,
+        cnn_out_channels: int,
+        proprio_dim: int,
+        proprio_hidden_sizes: Sequence[int],
+        feature_dim: int,
+    ):
         super().__init__()
+        self.cnn        = build_cnn1d(ray_channels, cnn_out_channels)
+        self.proprio_net = build_mlp(proprio_dim, proprio_hidden_sizes, proprio_hidden_sizes[-1])
+        self.fusion      = nn.Linear(cnn_out_channels + proprio_hidden_sizes[-1], feature_dim)
 
-        self.net = build_cnn(input_channels, output_channels)
-
-    
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.net(obs)
+    def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
+        # rays:    (B, ray_channels, num_rays)
+        # proprio: (B, proprio_dim)
+        cnn_feat    = self.cnn(rays).squeeze(-1)      # (B, cnn_out_channels)
+        proprio_feat = self.proprio_net(proprio)       # (B, proprio_hidden_sizes[-1])
+        return self.fusion(torch.cat([cnn_feat, proprio_feat], dim=-1))  # (B, feature_dim)

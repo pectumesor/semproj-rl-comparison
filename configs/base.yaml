@@ -12,6 +12,7 @@ model:
   backbone_hidden_sizes: [64, 64]
   policy_hidden_sizes: [64, 64]
   value_hidden_sizes: [64, 64]
+  save_interval: 10
 
 env:
   name: "NavEnv"
@@ -21,7 +22,7 @@ env:
   act_dim: 2
 
   max_speed: 3.0
-  max_range: 3.0
+  max_range: 5.0
   ray_density: 0.2
   fov: 180
   init_pos: {"x": 50.0, "y": 50.0}
@@ -30,22 +31,22 @@ env:
 
   n_iterations: 100
   max_steps: 1024
-  num_steps: 256
+  num_steps: 512
   num_envs: 32
   n_epochs: 5
   train_freq: 10
   gamma: 0.9
 
-  goal_radius: 2.0      # distance threshold to count as reaching the goal
+  goal_radius: 4.0      # distance threshold to count as reaching the goal
   dense_reward: true    # potential-based shaping: reward += distance reduction each step
 
 algorithms:
   gae_lambda: 0.95
   clip_epsilon: 0.2
-  entropy_coeff: 0.2
+  entropy_coeff: 0.1
   val_coeff: 0.8
   aux_coeff: 0.2
-  task_coeff: 0.8
+  task_coeff: 1.0
   intr_coeff: 0.2
   tau: 0.98
   target_entropy: -2

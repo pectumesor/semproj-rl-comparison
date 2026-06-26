@@ -3,8 +3,11 @@ Compare my own PPO implementation with Stable Baselines
 
 """
 import sys
+from datetime import datetime
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
 
 import hydra
 from omegaconf import DictConfig
@@ -17,7 +20,7 @@ from models import BaseAgent
 from algorithms import RolloutBuffer, MLPPPO
 
 #Env
-from envs import NavigationEnv, compute_num_rays, NavigationEnvSB3, MyBackbone
+from envs import NavigationEnvEasy, compute_num_rays, NavigationEnvSB3, MyBackbone
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 
@@ -30,21 +33,24 @@ import numpy as np
 device = torch.device( "mps" if torch.backends.mps.is_available() 
                       else "cuda" if torch.cuda.is_available()
                       else "cpu" )
-device = torch.device("cpu")
+#device = torch.device("cpu")
 print(f"Using device: {device}")
 
 
 @hydra.main( config_path="../configs", config_name="base", version_base=None)
 def main(cfg: DictConfig):
 
-    
     num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
-    num_classes = cfg.env.num_classes
-    obs_dim  = (num_classes + 1, num_rays)
 
+    # Derive shapes from the env directly so they never go out of sync with navigation_env.py
+    _probe = NavigationEnvEasy(cfg, None, num_rays, (1, num_rays), num_envs=1)
+    _obs, _ = _probe.reset()
+    ray_dim     = tuple(_obs["rays"].shape[1:])    # (C, R)
+    proprio_dim = _obs["proprio"].shape[-1]         # 2
+    del _probe
 
     observation_model = MLPObservationEmbeddings(
-        input_dim=(num_classes + 1) * num_rays,
+        input_dim=int(np.prod(ray_dim)) + proprio_dim,
         hidden_sizes=cfg.model.obs_embed_hidden_sizes,
         feature_dim=cfg.model.obs_embed_hidden_sizes[-1]
     )
@@ -58,25 +64,25 @@ def main(cfg: DictConfig):
     actor = GuassianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
                                 actions_dim=cfg.env.act_dim,
                                 hidden_sizes=cfg.model.policy_hidden_sizes)
-    
+
     crtic = ValueNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
-                          hidden_sizes=cfg.model.value_hidden_sizes)
-    
+                     hidden_sizes=cfg.model.value_hidden_sizes)
+
     agent = BaseAgent(obs_embed_model=observation_model,
                       backbone_model=backbone_model,
                       actor=actor, critic=crtic).to(device)
-    
-    buffer = RolloutBuffer(obs_dim=obs_dim,
+
+    buffer = RolloutBuffer(ray_dim=ray_dim,
+                           proprio_dim=proprio_dim,
                            act_dim=cfg.env.act_dim,
                            num_steps=cfg.env.num_steps,
                            num_envs=cfg.env.num_envs,
                            gamma=cfg.env.gamma,
                            gae_lambda=cfg.algorithms.gae_lambda,
                            device=device)
- 
 
-    env      = NavigationEnv(cfg, agent, num_rays, obs_dim, cfg.env.num_envs, device=device)
-    eval_env = NavigationEnv(cfg, agent, num_rays, obs_dim, 1,               device=device)
+    env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, cfg.env.num_envs, device=device).compile()
+    eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1,               device=device).compile()
     
     algorithm = MLPPPO(buffer=buffer,
                        device=device,
@@ -94,18 +100,24 @@ def main(cfg: DictConfig):
                        aux_coeff=cfg.algorithms.aux_coeff,
                        task_coeff=cfg.algorithms.task_coeff,
                        intr_coeff=cfg.algorithms.intr_coeff,
-                       eval_env=eval_env
+                       eval_env=eval_env,
+                       save_interval=cfg.model.save_interval
                        )
     
-    algorithm.train()
+    log_dir = ROOT_DIR / "logs" / "ppo"
+    run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
+    run_dir = log_dir / run_name
+    
+    algorithm.train(run_dir=run_dir)
 
-
-    vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, obs_dim), n_envs=cfg.env.num_envs)
+    vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, ray_dim, proprio_dim), n_envs=cfg.env.num_envs)
 
     policy_kwargs = dict(
         features_extractor_class=MyBackbone,
         features_extractor_kwargs=dict(
             features_dim=cfg.model.backbone_hidden_sizes[-1],
+            ray_dim=ray_dim,
+            proprio_dim=proprio_dim,
             obs_embed_hidden_sizes=list(cfg.model.obs_embed_hidden_sizes),
             backbone_hidden_sizes=list(cfg.model.backbone_hidden_sizes),
         ),
@@ -132,6 +144,8 @@ def main(cfg: DictConfig):
     )
 
     model.learn(total_timesteps=cfg.env.n_iterations * cfg.env.num_steps * cfg.env.num_envs)
+
+    model.save(run_dir / f"sb3.pt")
 
 
 

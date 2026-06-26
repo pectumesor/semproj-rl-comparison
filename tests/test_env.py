@@ -31,13 +31,13 @@ print(f"Using device: {device}")
 def main(cfg: DictConfig):
 
 
-    num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
+    num_rays    = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
     num_classes = cfg.env.num_classes
-    obs_dim  = (num_classes + 1, num_rays)
-
+    ray_dim     = (num_classes + 1, num_rays)   # (C, R) — 2-D, kept for CNN option
+    proprio_dim = 4                              # sin(θ), cos(θ), last_speed, last_turning
 
     observation_model = MLPObservationEmbeddings(
-        input_dim=(num_classes + 1) * num_rays,
+        input_dim=(num_classes + 1) * num_rays + proprio_dim,
         hidden_sizes=cfg.model.obs_embed_hidden_sizes,
         feature_dim=cfg.model.obs_embed_hidden_sizes[-1]
     )
@@ -59,17 +59,17 @@ def main(cfg: DictConfig):
                       backbone_model=backbone_model,
                       actor=actor, critic=crtic).to(device)
     
-    buffer = RolloutBuffer(obs_dim=obs_dim,
+    buffer = RolloutBuffer(ray_dim=ray_dim,
+                           proprio_dim=proprio_dim,
                            act_dim=cfg.env.act_dim,
                            num_steps=cfg.env.num_steps,
                            num_envs=cfg.env.num_envs,
                            gamma=cfg.env.gamma,
                            gae_lambda=cfg.algorithms.gae_lambda,
                            device=device)
- 
 
-    env      = NavigationEnv(cfg, agent, num_rays, obs_dim, cfg.env.num_envs, device=device)
-    eval_env = NavigationEnv(cfg, agent, num_rays, obs_dim, 1,               device=device)
+    env      = NavigationEnv(cfg, agent, num_rays, ray_dim, cfg.env.num_envs, device=device).compile()
+    eval_env = NavigationEnv(cfg, agent, num_rays, ray_dim, 1,               device=device).compile()
     
     algorithm = MLPPPO(buffer=buffer,
                        device=device,

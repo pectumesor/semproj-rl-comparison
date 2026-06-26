@@ -43,19 +43,24 @@ def build_cnn(
           input_channels: int,
           out_channels: int,
     ):
-    
-    """
-    Build a CNN using 3 blocks
-    """
-
     blocks = []
     current_in = input_channels
     for i in reversed(range(3)):
-        current_out = max(current_in, out_channels // (2 ** i) ) # Out // 4, Out // 2, Out // 1
+        current_out = max(current_in, out_channels // (2 ** i))
         blocks.extend(cnn_block(input_channels=current_in, output_channels=current_out))
         current_in = current_out
-
     return nn.Sequential(*blocks)
+
+
+def build_cnn1d(input_channels: int, out_channels: int) -> nn.Sequential:
+    """1-D CNN for ray observations (B, C, num_rays). Global-average-pools to (B, out_channels)."""
+    return nn.Sequential(
+        nn.Conv1d(input_channels, out_channels // 2, kernel_size=3, padding=1),
+        nn.ReLU(),
+        nn.Conv1d(out_channels // 2, out_channels, kernel_size=3, padding=1),
+        nn.ReLU(),
+        nn.AdaptiveAvgPool1d(1),   # (B, out_channels, 1)
+    )
 
 
 

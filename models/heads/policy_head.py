@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.distributions import Normal
 
 LOG_STD_MIN = -5
-LOG_STD_MAX = 2
+LOG_STD_MAX = 1.0
 
 
 class GuassianPolicyHead(nn.Module):
