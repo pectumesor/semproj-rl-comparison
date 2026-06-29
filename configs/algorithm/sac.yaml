@@ -1,0 +1,17 @@
+name: sac
+tau: 0.98
+target_entropy: -2
+init_alpha: 1.0
+actor_lr: 0.001
+critic_lr: 0.001
+alpha_lr: 0.001
+
+num_steps: 1024
+n_iterations: 100
+mini_batch_size: 256 
+n_gradient_update: 10
+warm_start_steps: 10
+train_freq: 20
+eval_freq: 50
+
+  

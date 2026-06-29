@@ -1,0 +1,18 @@
+defaults:
+  - algorithm: ppo
+  - env: base_env
+  - model: base_model
+  - _self_
+
+wandb:
+  project: semproj
+  entity: eazevedo
+  group: null        # override per experiment, e.g. "memory_ablation"
+  tags: []
+  mode: online       # online | offline | disabled
+
+seed: 42
+
+
+
+

@@ -1,0 +1,19 @@
+name: "NavEnv"
+room_path: "rooms/test_room.json"
+
+num_classes: 3
+act_dim: 2
+
+max_speed: 3.0
+max_range: 5.0
+ray_density: 0.2
+fov: 180
+
+
+init_pos: {"x": 50.0, "y": 50.0}
+goal_pos: {"x": 10.0, "y": 10.0}
+
+
+num_envs: 32
+gamma: 0.9
+goal_radius: 4.0      # distance threshold to count as reaching the goal

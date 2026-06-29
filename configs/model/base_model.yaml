@@ -1,0 +1,5 @@
+name: base-model
+obs_embed_hidden_sizes: [64, 64]
+backbone_hidden_sizes: [64, 64]
+policy_hidden_sizes: [64, 64]
+value_hidden_sizes: [64, 64]

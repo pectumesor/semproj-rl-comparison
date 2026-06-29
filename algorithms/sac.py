@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from omegaconf import DictConfig
 from .buffers.replay_buffer import ReplayBatch, ReplayBuffer
 import torch.optim as optim
 import torch.nn.functional as F
@@ -50,25 +51,14 @@ class SAC(ABC):
     buffer = None
     device = "cpu"
     env = None
-
-    # -- Training Iterations --
-    n_iterations = None
-    mini_batch_size = None
-    n_epochs = None
+    eval_env = None
 
     # -- Architecture --
     agent = None
     critic_target : DoubleQNet = None
 
-    # -- Constants
-    gamma = None
-    tau = None
-    init_alpha = None
-    target_entropy = None
-    actor_lr = None
-    critic_lr = None
-    alpha_lr = None
-    train_freq = None
+    # -- Algorithm Configuration --
+    cfg = None
 
 
     @abstractmethod
@@ -84,10 +74,9 @@ class SAC(ABC):
         pass
 
 class MLPSAC(SAC):
-    def __init__(self, buffer: ReplayBuffer, device: torch.device, env: gym.Env, eval_env: gym.Env,
-                n_iterations: int, mini_batch_size: int, n_gradient_updates: int, agent: BaseAgent | RecurrentAgent,
-                gamma: float, tau: float, init_alpha: float, target_entropy, warm_start_steps: int, 
-                train_freq: int, eval_freq: int, actor_lr: float, critic_lr: float, alpha_lr: float):
+    def __init__(self, buffer: ReplayBuffer, device: torch.device,
+                env: gym.Env, eval_env: gym.Env, agent: BaseAgent | RecurrentAgent,
+                cfg:DictConfig):
         
         super().__init__()
         
@@ -98,28 +87,28 @@ class MLPSAC(SAC):
         self.eval_env = eval_env
 
         # -- Training Iterations --
-        self.n_iterations = n_iterations
-        self.mini_batch_size = mini_batch_size
-        self.n_gradient_updates = n_gradient_updates
-        self.warm_start_steps = warm_start_steps
-        self.train_freq = train_freq
-        self.eval_freq = eval_freq
+        self.n_iterations = cfg.algorithm.n_iterations
+        self.mini_batch_size = cfg.algorithm.mini_batch_size
+        self.n_gradient_updates = cfg.algorithm.n_gradient_updates
+        self.warm_start_steps = cfg.algorithm.warm_start_steps
+        self.train_freq = cfg.algorithm.train_freq
+        self.eval_freq = cfg.algorithm.eval_freq
 
 
         # -- Architecture --
         self.agent = agent
         self.critic_target = self.agent.critic.copy()
-        self.log_apha = nn.Parameter(torch.log(init_alpha), dtype=torch.float32, device=device)
+        self.log_apha = nn.Parameter(torch.log(cfg.algorithm.init_alpha), dtype=torch.float32, device=device)
 
         # -- Constants
-        self.gamma = gamma
-        self.tau = tau
-        self.target_entropy = target_entropy
+        self.gamma = cfg.env.gamma
+        self.tau = cfg.algorithm.tau
+        self.target_entropy = cfg.algorithm.target_entropy
 
         # Optimizer initialization
-        self.actor_optimizer = optim.Adam(params=self.agent.actor.parameters(), lr=actor_lr)
-        self.critic_optimizer = optim.Adam(params=self.agent.critic.parameters(), lr=critic_lr)
-        self.alpha_optimizer = optim.Adam(params=self.log_apha.parameters(), lr=alpha_lr)
+        self.actor_optimizer = optim.Adam(params=self.agent.actor.parameters(), lr=cfg.algorithm.actor_lr)
+        self.critic_optimizer = optim.Adam(params=self.agent.critic.parameters(), lr=cfg.algorithm.critic_lr)
+        self.alpha_optimizer = optim.Adam(params=self.log_apha.parameters(), lr=cfg.algorithm.alpha_lr)
 
     
     def sample_mini_batch(self, batch_size: int) -> ReplayBuffer:
@@ -206,13 +195,12 @@ class MLPSAC(SAC):
                               alpha_loss=alpha_loss.item(),
                               aux_loss=0.0,
                               alpha=self.alpha().item())
-    
-    
+       
     def evaluate_policy(self,num_episodes=5):
         returns = []
         lengths = []
 
-        self.agent.eval_mode()
+        self.agent.eval()
         with torch.inference_mode():
             for _ in range(num_episodes):
                 obs, _ = self.eval_env.reset()
@@ -221,9 +209,8 @@ class MLPSAC(SAC):
                 episode_length = 0
 
                 while not done:
-                    obs = torch.as_tensor(obs, dtype=torch.float, device=self.buffer.device).unsqueeze(0)
                     action = self.agent.predict_action(obs)
-                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action.cpu().numpy().squeeze(0))
+                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action)
 
                     obs = next_obs
                     episode_return += reward
@@ -233,14 +220,13 @@ class MLPSAC(SAC):
                 returns.append(float(episode_return))
                 lengths.append(int(episode_length))
 
+        self.agent.train()
         return float(np.mean(returns)), float(np.mean(lengths))
-
     
     def train(self):
 
         self.agent.train()
         obs, _ = self.env.reset()
-        obs = torch.as_tensor(obs, dtype=torch.float, device=self.device)
         steps = 0
 
         for iter in range(self.n_iterations):
@@ -254,16 +240,15 @@ class MLPSAC(SAC):
                     actions = self.agent.sample_action(obs)
                 
                 next_obs, reward, terminated, truncated, info = self.env.step(actions)
-                next_obs = torch.as_tensor(next_obs, dtype=torch.float32, device=self.buffer.device)
                 done = terminated or truncated
 
                 self.buffer.store(obs, actions, reward, next_obs, done)
                 
                 obs = next_obs
 
-                if done:
-                    obs, _ = self.env.reset()
-                    obs = torch.as_tensor(obs, dtype=torch.float32, device=self.buffer.device)
+                new_obs, _ = self.env.reset(done=done)
+                obs["rays"][done]    = new_obs["rays"][done]
+                obs["proprio"][done] = new_obs["proprio"][done]
             
             if steps >= self.warm_start_steps and steps % self.train_freq == 0:
                 mean_stats = SACUpdateStats.init_lists()

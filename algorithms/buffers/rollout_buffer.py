@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import torch
-
+from omegaconf import DictConfig
 
 @dataclass
 class RolloutBatch:
@@ -21,32 +21,31 @@ class RolloutBuffer:
             self,
             ray_dim: tuple,
             proprio_dim: int,
-            act_dim: int,
-            num_steps: int,
-            num_envs: int,
-            gamma: float,
-            gae_lambda: float,
             device: torch.device,
+            cfg: DictConfig
             ):
-
-        self.rays_buf   = torch.zeros((num_steps, num_envs, *ray_dim),   dtype=torch.float, device=device)
-        self.proprio_buf = torch.zeros((num_steps, num_envs, proprio_dim), dtype=torch.float, device=device)
-        self.act_buf    = torch.zeros((num_steps, num_envs, act_dim),    dtype=torch.float, device=device)
-        self.logp_buf   = torch.zeros((num_steps, num_envs),             dtype=torch.float, device=device)
-        self.mu_buf     = torch.zeros((num_steps, num_envs, act_dim),    dtype=torch.float, device=device)
-        self.std_buf    = torch.zeros((num_steps, num_envs, act_dim),    dtype=torch.float, device=device)
-        self.val_buf    = torch.zeros((num_steps, num_envs),             dtype=torch.float, device=device)
-        self.done_buf   = torch.zeros((num_steps, num_envs),             dtype=torch.bool,  device=device)
-        self.rew_buf    = torch.zeros((num_steps, num_envs),             dtype=torch.float, device=device)
-        self.ret_buf    = torch.zeros((num_steps, num_envs),             dtype=torch.float, device=device)
-        self.adv_buf    = torch.zeros((num_steps, num_envs),             dtype=torch.float, device=device)
-
-        self.gamma      = gamma
-        self.gae_lambda = gae_lambda
-        self.num_steps  = num_steps
-        self.num_envs   = num_envs
+        
+        self.act_dim    = cfg.env.act_dim
+        self.gamma      = cfg.env.gamma
+        self.gae_lambda = cfg.env.gae_lambda
+        self.num_steps  = cfg.algorithm.num_steps
+        self.num_envs   = cfg.env.num_envs
         self.device     = device
         self.ptr        = 0
+
+        self.rays_buf   = torch.zeros((self.num_steps, self.num_envs, *ray_dim),        dtype=torch.float, device=device)
+        self.proprio_buf = torch.zeros((self.num_steps, self.num_envs, proprio_dim),    dtype=torch.float, device=device)
+        self.act_buf    = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.logp_buf   = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.mu_buf     = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.std_buf    = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.val_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.done_buf   = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.bool,  device=device)
+        self.rew_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.ret_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.adv_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+
+       
 
     def store(self, obs: dict, act, logp, mu, std, val, rew, done):
         if self.ptr >= self.num_steps:

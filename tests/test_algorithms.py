@@ -17,11 +17,11 @@ from models import (MLPObservationEmbeddings,
                     ValueNet)
 # Agents
 from models import BaseAgent
-from algorithms import RolloutBuffer, MLPPPO
+from algorithms import RolloutBuffer, MLPPPO, MLPSAC, ReplayBuffer
 
 #Env
 from envs import NavigationEnvEasy, compute_num_rays, NavigationEnvSB3, MyBackbone
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.env_util import make_vec_env
 
 
@@ -37,7 +37,7 @@ device = torch.device( "mps" if torch.backends.mps.is_available()
 print(f"Using device: {device}")
 
 
-@hydra.main( config_path="../configs", config_name="base", version_base=None)
+@hydra.main( config_path="../configs", config_name="train", version_base=None)
 def main(cfg: DictConfig):
 
     num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
@@ -72,43 +72,8 @@ def main(cfg: DictConfig):
                       backbone_model=backbone_model,
                       actor=actor, critic=crtic).to(device)
 
-    buffer = RolloutBuffer(ray_dim=ray_dim,
-                           proprio_dim=proprio_dim,
-                           act_dim=cfg.env.act_dim,
-                           num_steps=cfg.env.num_steps,
-                           num_envs=cfg.env.num_envs,
-                           gamma=cfg.env.gamma,
-                           gae_lambda=cfg.algorithms.gae_lambda,
-                           device=device)
-
     env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, cfg.env.num_envs, device=device).compile()
     eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1,               device=device).compile()
-    
-    algorithm = MLPPPO(buffer=buffer,
-                       device=device,
-                       env=env,
-                       lr=cfg.model.lr,
-                       n_iterations=cfg.env.n_iterations,
-                       mini_batch=cfg.model.batch_size,
-                       n_epochs=cfg.env.n_epochs,
-                       agent=agent,
-                       gamma=cfg.env.gamma,
-                       gae_lambda=cfg.algorithms.gae_lambda,
-                       clip_epsilon=cfg.algorithms.clip_epsilon,
-                       entropy_coeff=cfg.algorithms.entropy_coeff,
-                       val_coeff=cfg.algorithms.val_coeff,
-                       aux_coeff=cfg.algorithms.aux_coeff,
-                       task_coeff=cfg.algorithms.task_coeff,
-                       intr_coeff=cfg.algorithms.intr_coeff,
-                       eval_env=eval_env,
-                       save_interval=cfg.model.save_interval
-                       )
-    
-    log_dir = ROOT_DIR / "logs" / "ppo"
-    run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
-    run_dir = log_dir / run_name
-    
-    algorithm.train(run_dir=run_dir)
 
     vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, ray_dim, proprio_dim), n_envs=cfg.env.num_envs)
 
@@ -127,23 +92,43 @@ def main(cfg: DictConfig):
         share_features_extractor=True,
     )
 
-    model = PPO(
+    if cfg.algorithm.name == "ppo":
+        buffer = RolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device,cfg=cfg)
+        algorithm = MLPPPO(buffer=buffer,device=device,env=env,eval_env=eval_env, agent=agent, cfg=cfg)
+        model = PPO(
         "MlpPolicy",
         vec_env,
-        learning_rate=cfg.model.lr,
-        n_steps=cfg.env.num_steps,
-        batch_size=cfg.model.batch_size,
-        n_epochs=cfg.env.n_epochs,
+        learning_rate=cfg.algorithm.lr,
+        n_steps=cfg.algorithm.num_steps,
+        batch_size=cfg.algorithm.mini_batch_size,
+        n_epochs=cfg.algorithm.n_epochs,
         gamma=cfg.env.gamma,
-        gae_lambda=cfg.algorithms.gae_lambda,
-        clip_range=cfg.algorithms.clip_epsilon,
-        ent_coef=cfg.algorithms.entropy_coeff,
-        vf_coef=cfg.algorithms.val_coeff,
+        gae_lambda=cfg.algorithm.gae_lambda,
+        clip_range=cfg.algorithm.clip_epsilon,
+        ent_coef=cfg.algorithm.entropy_coeff,
+        vf_coef=cfg.algorithm.val_coeff,
         policy_kwargs=policy_kwargs,
         verbose=1,
     )
+    else:
+        buffer = ReplayBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device, cfg=cfg)
+        algorithm = MLPSAC(buffer=buffer, device=device,env= env, eval_env=eval_env, agent=agent,cfg=cfg)
+        model = SAC(
+            "MlpPolicy", vec_env, learning_rate=cfg.algorithm.actor_lr, buffer_size=cfg.algorithm.num_steps,
+            learning_starts=cfg.algorithm.warm_start_steps, batch_size=cfg.algorithm.mini_batch_size,
+            tau = cfg.algorithm.tau, gamma= cfg.env.gamma, train_freq=cfg.algorithm.train_freq, gradient_steps=cfg.algorithm.n_gradient_update,
+            n_steps=cfg.algorithm.n_iterations,target_entropy= cfg.algorithm.target_entropy, policy_kwargs=policy_kwargs, verbose=1
+        )
+        
 
-    model.learn(total_timesteps=cfg.env.n_iterations * cfg.env.num_steps * cfg.env.num_envs)
+    
+    log_dir = ROOT_DIR / "logs" / f"{cfg.algorithm.name}"
+    run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
+    run_dir = log_dir / run_name
+    
+    algorithm.train(run_dir=run_dir)
+
+    model.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs)
 
     model.save(run_dir / f"sb3.pt")
 

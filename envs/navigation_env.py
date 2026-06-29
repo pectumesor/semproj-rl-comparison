@@ -41,7 +41,7 @@ class NavigationEnv(gym.Env):
         self.act_dim   = cfg.env.act_dim
         self.max_speed = cfg.env.max_speed
         self.fov       = cfg.env.fov
-        self.max_steps = cfg.env.max_steps
+        self.max_steps = cfg.algorithm.max_steps
         self.num_rays  = num_rays
         self.num_envs  = num_envs
         self.device    = device
@@ -49,7 +49,6 @@ class NavigationEnv(gym.Env):
 
         self._half_fov_rad = float(np.deg2rad(self.fov / 2.0))
         self.goal_radius  = float(cfg.env.get("goal_radius", 1e-4))
-        self.dense_reward = bool(cfg.env.get("dense_reward", False))
 
         self.initial_pos = torch.tensor(
             [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
@@ -111,6 +110,15 @@ class NavigationEnv(gym.Env):
         self.color_field      = torch.compile(self.color_field,      mode=mode)
         return self
 
+    def compute_reward(self, terminated):
+        reward = torch.full(
+            (self.num_envs,), -1.0 / self.max_steps,
+            dtype=torch.float32, device=self.device,
+        )
+
+        reward[terminated] += 1.0
+        return reward
+
     def reset(self, seed=None, options=None, done: torch.Tensor = None):
         """
         done: bool tensor (num_envs,) — reset only those envs. None resets all.
@@ -166,13 +174,7 @@ class NavigationEnv(gym.Env):
         dist_to_goal = torch.norm(self.agent_pos - self.goal_pos, dim=-1)
         terminated = dist_to_goal <= self.goal_radius
 
-        reward = torch.full(
-            (self.num_envs,), -1.0 / self.max_steps,
-            dtype=torch.float32, device=self.device,
-        )
-        if self.dense_reward:
-            reward += (self.prev_dist - dist_to_goal) / (self.ray_cast.max_range * self.max_steps)
-        reward[terminated] += 1.0
+        reward = self.compute_reward(terminated)
 
         self.prev_dist = dist_to_goal
         return obs, reward, terminated, truncated, {
@@ -264,7 +266,7 @@ class NavigationEnv(gym.Env):
 
 class NavigationEnvEasy(NavigationEnv):
     """
-    Wrapper to NavigationEnv that enhances the observations to make learning easy.
+    Wrapper to NavigationEnv that enhances the observations and reward function to make learning easy.
     Used to compare custom PPO/SAC implementations with Stable Baselines3
     """
 
@@ -324,4 +326,14 @@ class NavigationEnvEasy(NavigationEnv):
             self.last_turning,
            ], dim=-1)
         return {"rays": rays, "proprio": proprio}
+
+    def compute_reward(self, terminated):
+
+        reward = super().compute_reward(terminated)
+        dist_to_goal = torch.norm(self.agent_pos - self.goal_pos, dim=-1)
+        reward += (self.prev_dist - dist_to_goal) / (self.ray_cast.max_range * self.max_steps)
+
+        return reward
+
+
 

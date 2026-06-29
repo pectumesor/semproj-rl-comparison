@@ -2,6 +2,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import numpy as np
+from omegaconf import DictConfig
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer
@@ -25,26 +26,13 @@ class PPO(ABC):
     buffer = None
     device = "cpu"
     env = None
-    lr = None
-
-    # -- Training Iterations --
-    n_iterations = None
-    mini_batch = None
-    n_epochs = None
+    eval_env = None
 
     # -- Architecture --
     agent = None
 
-
-    # -- Constants
-    gamma = None
-    gae_lambda = None
-    clip_esilon = None
-    entropy_coeff = None
-    val_coeff = None
-    aux_coeff = None
-    task_coeff = None
-    intr_coeff = None
+    # -- Algorithm Configuration --
+    cfg = None
 
 
     @abstractmethod
@@ -62,39 +50,40 @@ class PPO(ABC):
 class MLPPPO(PPO):
     
     def __init__(self,
-                buffer: RolloutBuffer, device: torch.device, env: gym.Env, lr: float,
-                n_iterations: int, mini_batch: int, n_epochs: int,
-                agent: BaseAgent | RecurrentAgent, gamma: float, gae_lambda: float, clip_epsilon: float, entropy_coeff: float,
-                val_coeff: float, aux_coeff: float, task_coeff: float, intr_coeff: float, save_interval: int,
-                eval_env: Optional[gym.Env] = None
+                buffer: RolloutBuffer, device: torch.device,
+                env: gym.Env, eval_env: gym.Env, agent: BaseAgent | RecurrentAgent,
+                cfg: DictConfig
                 ):
         super().__init__()
+
         # -- System --
         self.buffer = buffer
         self.device = device
         self.env = env
-        self.eval_env = eval_env
-        self.lr = lr
-
-        # -- Training Iterations --
-        self.n_iterations = n_iterations
-        self.mini_batch = mini_batch
-        self.n_epochs = n_epochs
-        self.save_interval = save_interval
-
+        self.eval_env = eval_env 
+        
         # -- Architecture --
         self.agent = agent
 
-        # -- Constants
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
-        self.clip_esilon = clip_epsilon
-        self.entropy_coeff = entropy_coeff
-        self.val_coeff = val_coeff
-        self.aux_coeff = aux_coeff
-        self.task_coeff = task_coeff
-        self.intr_coeff = intr_coeff
+        # -- Algorithm Configuration --
+        #         
+        self.lr = cfg.algorithm.lr
 
+        # -- Training Iterations --
+        self.n_iterations = cfg.algorithm.n_iterations
+        self.mini_batch = cfg.algorithm.mini_batch_size
+        self.n_epochs = cfg.algorithm.n_epochs
+        self.save_interval = cfg.algorithm.save_interval
+
+        # -- Constants
+        self.gamma = cfg.env.gamma
+        self.gae_lambda = cfg.algorithm.gae_lambda
+        self.clip_esilon = cfg.algorithm.clip_epsilon
+        self.entropy_coeff = cfg.algorithm.entropy_coeff
+        self.val_coeff = cfg.algorithm.val_coeff
+        self.aux_coeff = cfg.algorithm.aux_coeff
+        self.task_coeff = cfg.algorithm.task_coeff
+        self.intr_coeff = cfg.algorithmintr_coeff
 
         self.optimizer = optim.Adam(params=self.agent.parameters(), lr=self.lr)
 
