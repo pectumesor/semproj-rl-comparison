@@ -30,8 +30,8 @@ env:
 
 
   n_iterations: 100
-  max_steps: 1024
-  num_steps: 512
+  max_steps: 512
+  num_steps: 256
   num_envs: 32
   n_epochs: 5
   train_freq: 10

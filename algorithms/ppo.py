@@ -108,11 +108,7 @@ class MLPPPO(PPO):
             obs["proprio"][done] = new_obs["proprio"][done]
 
             action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
-            clipped_action = action.clamp(
-                torch.tensor(self.env.action_space.low,  dtype=torch.float32, device=self.device),
-                torch.tensor(self.env.action_space.high, dtype=torch.float32, device=self.device),
-            )
-            next_obs, reward, terminated, truncated, info = self.env.step(clipped_action)
+            next_obs, reward, terminated, truncated, info = self.env.step(action)
             done = terminated | truncated
 
             with torch.no_grad():
@@ -269,7 +265,7 @@ class MLPPPO(PPO):
 
         self.agent.eval()
         with torch.no_grad():
-            for _ in range(num_episodes):
+            for i in range(num_episodes):
                 obs, _ = self.eval_env.reset()
                 done = False
                 episode_return = 0.0

@@ -13,6 +13,7 @@ dependencies:
   - pip:
     - gymnasium>=0.29  
     - stable-baselines3 # optional — useful to cross-check your PPO/SAC impl
+    - pygame
 
   # Config management
   - pip:

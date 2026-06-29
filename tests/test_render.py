@@ -33,7 +33,7 @@ import numpy as np
 device = torch.device( "mps" if torch.backends.mps.is_available() 
                       else "cuda" if torch.cuda.is_available()
                       else "cpu" )
-#device = torch.device("cpu")
+device = torch.device("cpu")
 print(f"Using device: {device}")
 
 
@@ -81,8 +81,8 @@ def main(cfg: DictConfig):
                            gae_lambda=cfg.algorithms.gae_lambda,
                            device=device)
 
-    env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, cfg.env.num_envs, device=device).compile()
-    eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1,               device=device).compile()
+    env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)
+    eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)
     
     algorithm = MLPPPO(buffer=buffer,
                        device=device,
@@ -105,12 +105,12 @@ def main(cfg: DictConfig):
                        )
     
     log_dir = ROOT_DIR / "logs" / "ppo"
-    run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
+    run_name = "26_06_26_15_44_30_model"
     run_dir = log_dir / run_name
     
-    algorithm.train(run_dir=run_dir)
+    agent.load_model(run_dir/"iter_100.pt", device, algorithm.optimizer)
 
-    vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, ray_dim, proprio_dim), n_envs=cfg.env.num_envs)
+    vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, ray_dim, proprio_dim), n_envs=1)
 
     policy_kwargs = dict(
         features_extractor_class=MyBackbone,
@@ -127,25 +127,31 @@ def main(cfg: DictConfig):
         share_features_extractor=True,
     )
 
-    model = PPO(
-        "MlpPolicy",
-        vec_env,
-        learning_rate=cfg.model.lr,
-        n_steps=cfg.env.num_steps,
-        batch_size=cfg.model.batch_size,
-        n_epochs=cfg.env.n_epochs,
-        gamma=cfg.env.gamma,
-        gae_lambda=cfg.algorithms.gae_lambda,
-        clip_range=cfg.algorithms.clip_epsilon,
-        ent_coef=cfg.algorithms.entropy_coeff,
-        vf_coef=cfg.algorithms.val_coeff,
-        policy_kwargs=policy_kwargs,
-        verbose=1,
-    )
+    model = PPO.load(run_dir/"sb3.pt", env=vec_env)
 
-    model.learn(total_timesteps=cfg.env.n_iterations * cfg.env.num_steps * cfg.env.num_envs)
+    obs=vec_env.reset()
 
-    model.save(run_dir / f"sb3.pt")
+    total_reward = 0
+    for _ in range(100):
+        action,_ = model.predict(obs)
+        obs, reward, done,_ = vec_env.step(action)
+
+        if done:
+            obs = vec_env.reset()
+        vec_env.envs[0].unwrapped.render(obs[0], "SB3 Result")
+
+    total_reward = 0
+    agent.eval()
+    obs, info = env.reset()
+    for _ in range(100):
+        action = agent.predict_action(obs)
+        obs, reward, done,_, info = env.step(action)
+        total_reward += reward
+
+        if done.any():
+            obs, _ = env.reset()
+        env.render(obs, "Custom Algorithm Result")    
+
 
 if __name__ == "__main__":
     main()

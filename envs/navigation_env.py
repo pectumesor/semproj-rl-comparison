@@ -1,8 +1,9 @@
 import torch
 import numpy as np
 import gymnasium as gym
+import pygame
 from omegaconf import DictConfig
-from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends, PerlinColor
+from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends, PerlinColor, w2s
 
 class NavigationEnv(gym.Env):
     """
@@ -10,12 +11,17 @@ class NavigationEnv(gym.Env):
 
     All state is stored as on-device tensors. reset() and step() return tensors.
 
-    Observation per env: (7, num_rays)
+    Observation rays per env: (7, num_rays)
         channel 0 — no_hit indicator
         channel 1 — goal_hit indicator  (ray-circle test; not a wall cast)
         channel 2 — wall_hit indicator
         channel 3 — normalised distance [0, 1]
         channels 4-6 — Perlin RGB at the hit / endpoint global (x, y)
+    
+    Observatio proprioceptive: (num_envs, 2)
+        - last steps speed
+        - last steps turning angle
+        
 
     Action: (num_envs, 2)
         [:, 0] turning in [-1, 1]  →  ±half_fov radians
@@ -56,8 +62,8 @@ class NavigationEnv(gym.Env):
 
         self.color_field = PerlinColor(device=device)
 
-        walls = walls_json_to_numpy(cfg.env.room_path)
-        ws_np, we_np = compute_starts_and_ends(walls)
+        self.walls = walls_json_to_numpy(cfg.env.room_path)
+        ws_np, we_np = compute_starts_and_ends(self.walls)
         wall_starts = torch.tensor(ws_np, dtype=torch.float32, device=device)
         wall_ends   = torch.tensor(we_np, dtype=torch.float32, device=device)
         self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays).to(device)
@@ -128,6 +134,13 @@ class NavigationEnv(gym.Env):
         action: (num_envs, 2) tensor on device.
         Returns obs, reward, terminated, truncated, info — all tensors on device.
         """
+
+        # Clamp actions to environment bounds - Same way that SB3 handles this  
+        action = action.clamp(
+            torch.tensor(self.action_space.low, dtype=torch.float32, device=self.device),
+            torch.tensor(self.action_space.high, dtype=torch.float32, device=self.device)
+            )
+
         self.steps += 1
         truncated = self.steps >= self.max_steps
         self.steps[truncated] = 0
@@ -206,8 +219,48 @@ class NavigationEnv(gym.Env):
 
         return {"rays": rays, "proprio": proprio}
 
-    def render(self):
-        pass
+    def render(self, obs, title, mode="human"):
+
+        _SCREEN  = 900
+        _WORLD   = 100.0
+        _PADDING = 60   # pixels of margin on each side
+
+        if not hasattr(self, 'screen'):
+            pygame.init()
+            self.screen = pygame.display.set_mode((_SCREEN, _SCREEN))
+            pygame.display.set_caption(f"{title}")
+            self.clock = pygame.time.Clock()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                quit()
+
+        scale = (_SCREEN - 2 * _PADDING) / _WORLD
+
+        self.screen.fill((255, 255, 255))
+
+        for start, end in self.walls:
+            pygame.draw.line(self.screen, (0, 0, 0), 
+                             w2s(start, scale, _SCREEN, _PADDING),
+                               w2s(end, scale, _SCREEN, _PADDING), 2)
+
+        pygame.draw.circle(self.screen, (0, 100, 255),
+                            w2s(self.agent_pos[0], scale, _SCREEN, _PADDING), 6)
+        pygame.draw.circle(self.screen, (0, 255, 0),
+                              w2s(self.goal_pos, scale, _SCREEN, _PADDING), 8)
+
+        intersect, _, _ = self.ray_cast.scan(self.agent_pos, self.facing_direction)
+        agent_screen = w2s(self.agent_pos[0], scale, _SCREEN, _PADDING)
+        for i,ray in enumerate(intersect[0]):   # env 0 rays: (num_rays, 2)
+            color = (obs["rays"][0, 4:, :].T)[i]
+            pygame.draw.line(self.screen, (int(color[0] * 255), 
+                                           int(color[1] * 255), 
+                                           int(color[2] * 255)), agent_screen,
+                                            w2s(ray, scale, _SCREEN, _PADDING), 1)
+
+        pygame.display.flip()
+        self.clock.tick(5)
 
 class NavigationEnvEasy(NavigationEnv):
     """

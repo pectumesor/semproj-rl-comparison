@@ -207,3 +207,8 @@ def compute_num_rays(fov, ray_density):
     if num_rays % 2 == 0:
         num_rays += 1
     return num_rays
+
+def w2s(pos, scale, screen_size, padding):
+            """World (x, y) → pygame pixel (px, py) with Y-flip and padding."""
+            return (int(float(pos[0]) * scale) + padding,
+                    int(screen_size - padding - float(pos[1]) * scale))
