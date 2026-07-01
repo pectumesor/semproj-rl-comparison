@@ -1,0 +1,11 @@
+defaults:
+  - algorithm: ppo
+  - env: base_env
+  - model: base_model
+  - _self_
+
+seed: 42
+
+
+
+

@@ -31,13 +31,13 @@ class ReplayBuffer:
         self.ptr = 0
         self.size = 0
         
-        self.rays_buf   = torch.zeros((self.num_steps, self.num_envs, *ray_dim),   dtype=torch.float, device=device)
-        self.proprio_buf = torch.zeros((self.num_steps, self.num_envs, proprio_dim), dtype=torch.float, device=device)
-        self.act_buf = torch.Tensor((self.num_steps, self.num_envs, self.act_dim), dtype=torch.float, device=device)
-        self.next_rays_buf   = torch.zeros((self.num_steps, self.num_envs, *ray_dim),   dtype=torch.float, device=device)
-        self.next_proprio_buf = torch.zeros((self.num_steps, self.num_envs, proprio_dim), dtype=torch.float, device=device)
-        self.rew_buf = torch.Tensor((self.num_steps, self.num_envs), dtype=torch.float, device=device)
-        self.done_buf = torch.Tensor((self.num_steps,  self.num_envs), dtype=torch.bool, device=device)
+        self.rays_buf   = torch.zeros((self.num_steps, self.num_envs, *ray_dim),   dtype=torch.float32, device=device)
+        self.proprio_buf = torch.zeros((self.num_steps, self.num_envs, proprio_dim), dtype=torch.float32, device=device)
+        self.act_buf = torch.zeros((self.num_steps, self.num_envs, self.act_dim), dtype=torch.float32, device=device)
+        self.next_rays_buf   = torch.zeros((self.num_steps, self.num_envs, *ray_dim),   dtype=torch.float32, device=device)
+        self.next_proprio_buf = torch.zeros((self.num_steps, self.num_envs, proprio_dim), dtype=torch.float32, device=device)
+        self.rew_buf = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float32, device=device)
+        self.done_buf = torch.zeros((self.num_steps,  self.num_envs), dtype=torch.bool, device=device)
 
 
         
@@ -66,8 +66,8 @@ class ReplayBuffer:
     
     def get(self, batch_size:int) -> ReplayBatch:
 
-        env_idx = torch.randint(low=0, high=self.num_envs, size=batch_size)
-        batch_idx = torch.randint(low=0, high=self.size, size=batch_size)
+        env_idx = torch.randint(low=0, high=self.num_envs, size=[batch_size])
+        batch_idx = torch.randint(low=0, high=self.size, size=[batch_size])
 
         return  ReplayBatch(
             obs={

@@ -6,3 +6,7 @@
 #Hydra outputs
 outputs/
 logs/
+
+
+# Wandb log files
+wandb/

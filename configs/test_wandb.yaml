@@ -6,9 +6,9 @@ defaults:
 
 wandb:
   project: semproj
-  entity: eazevedo
-  group: null        # override per experiment, e.g. "memory_ablation"
-  tags: []
+  entity: eazevedo-eth-z-rich
+  group: test        
+  tags: [ppo]
   mode: online       # online | offline | disabled
 
 seed: 42

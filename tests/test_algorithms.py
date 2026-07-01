@@ -14,7 +14,7 @@ from omegaconf import DictConfig
 # Architecture pieces
 from models import (MLPObservationEmbeddings,
                     MLPBackbone, GuassianPolicyHead,
-                    ValueNet)
+                    ValueNet, SquashedGaussianPolicyHead, DoubleQNet)
 # Agents
 from models import BaseAgent
 from algorithms import RolloutBuffer, MLPPPO, MLPSAC, ReplayBuffer
@@ -37,7 +37,7 @@ device = torch.device( "mps" if torch.backends.mps.is_available()
 print(f"Using device: {device}")
 
 
-@hydra.main( config_path="../configs", config_name="train", version_base=None)
+@hydra.main( config_path="../configs", config_name="test_algorithm", version_base=None)
 def main(cfg: DictConfig):
 
     num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
@@ -61,23 +61,33 @@ def main(cfg: DictConfig):
         output_dim=cfg.model.backbone_hidden_sizes[-1]
     )
 
-    actor = GuassianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
+    if cfg.algorithm.name == "ppo":
+        actor = GuassianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
                                 actions_dim=cfg.env.act_dim,
                                 hidden_sizes=cfg.model.policy_hidden_sizes)
-
-    crtic = ValueNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
+        
+        critic = ValueNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
                      hidden_sizes=cfg.model.value_hidden_sizes)
+    else:
+
+        actor = SquashedGaussianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
+                                           action_dim=cfg.env.act_dim,
+                                           hidden_sizes=cfg.model.policy_hidden_sizes)
+        
+        critic = DoubleQNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1], 
+                            action_dim=cfg.env.act_dim,
+                            hidden_sizes=cfg.model.value_hidden_sizes)
 
     agent = BaseAgent(obs_embed_model=observation_model,
                       backbone_model=backbone_model,
-                      actor=actor, critic=crtic).to(device)
+                      actor=actor, critic=critic).to(device)
 
     env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, cfg.env.num_envs, device=device).compile()
     eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1,               device=device).compile()
 
     vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, ray_dim, proprio_dim), n_envs=cfg.env.num_envs)
 
-    policy_kwargs = dict(
+    _features_extractor_kwargs = dict(
         features_extractor_class=MyBackbone,
         features_extractor_kwargs=dict(
             features_dim=cfg.model.backbone_hidden_sizes[-1],
@@ -86,9 +96,18 @@ def main(cfg: DictConfig):
             obs_embed_hidden_sizes=list(cfg.model.obs_embed_hidden_sizes),
             backbone_hidden_sizes=list(cfg.model.backbone_hidden_sizes),
         ),
+        activation_fn=nn.ReLU,
+    )
+    ppo_policy_kwargs = dict(
+        **_features_extractor_kwargs,
         net_arch=dict(pi=list(cfg.model.policy_hidden_sizes),
                       vf=list(cfg.model.value_hidden_sizes)),
-        activation_fn=nn.ReLU,
+        share_features_extractor=True,
+    )
+    sac_policy_kwargs = dict(
+        **_features_extractor_kwargs,
+        net_arch=dict(pi=list(cfg.model.policy_hidden_sizes),
+                      qf=list(cfg.model.value_hidden_sizes)),
         share_features_extractor=True,
     )
 
@@ -107,7 +126,7 @@ def main(cfg: DictConfig):
         clip_range=cfg.algorithm.clip_epsilon,
         ent_coef=cfg.algorithm.entropy_coeff,
         vf_coef=cfg.algorithm.val_coeff,
-        policy_kwargs=policy_kwargs,
+        policy_kwargs=ppo_policy_kwargs,
         verbose=1,
     )
     else:
@@ -116,12 +135,11 @@ def main(cfg: DictConfig):
         model = SAC(
             "MlpPolicy", vec_env, learning_rate=cfg.algorithm.actor_lr, buffer_size=cfg.algorithm.num_steps,
             learning_starts=cfg.algorithm.warm_start_steps, batch_size=cfg.algorithm.mini_batch_size,
-            tau = cfg.algorithm.tau, gamma= cfg.env.gamma, train_freq=cfg.algorithm.train_freq, gradient_steps=cfg.algorithm.n_gradient_update,
-            n_steps=cfg.algorithm.n_iterations,target_entropy= cfg.algorithm.target_entropy, policy_kwargs=policy_kwargs, verbose=1
+            tau=cfg.algorithm.tau, gamma=cfg.env.gamma, train_freq=cfg.algorithm.train_freq,
+            gradient_steps=cfg.algorithm.n_gradient_update, target_entropy=cfg.algorithm.target_entropy,
+            policy_kwargs=sac_policy_kwargs, verbose=1,
         )
         
-
-    
     log_dir = ROOT_DIR / "logs" / f"{cfg.algorithm.name}"
     run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
     run_dir = log_dir / run_name

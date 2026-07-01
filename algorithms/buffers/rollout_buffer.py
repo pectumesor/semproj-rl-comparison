@@ -27,7 +27,7 @@ class RolloutBuffer:
         
         self.act_dim    = cfg.env.act_dim
         self.gamma      = cfg.env.gamma
-        self.gae_lambda = cfg.env.gae_lambda
+        self.gae_lambda = cfg.algorithm.gae_lambda
         self.num_steps  = cfg.algorithm.num_steps
         self.num_envs   = cfg.env.num_envs
         self.device     = device

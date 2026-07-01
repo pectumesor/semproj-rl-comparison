@@ -1,4 +1,5 @@
 from typing import Optional, Tuple
+import wandb
 import torch
 import torch.nn as nn
 import numpy as np
@@ -18,7 +19,9 @@ class PPOUpdateStats:
     mean_surrogate_loss: float
     mean_value_loss: float
     mean_entropy: float
+    mean_train_rew: float
     mean_aux_loss: float = 0
+    
 
 class PPO(ABC):
 
@@ -67,7 +70,7 @@ class MLPPPO(PPO):
 
         # -- Algorithm Configuration --
         #         
-        self.lr = cfg.algorithm.lr
+        self.learning_rate = cfg.algorithm.lr
 
         # -- Training Iterations --
         self.n_iterations = cfg.algorithm.n_iterations
@@ -83,43 +86,45 @@ class MLPPPO(PPO):
         self.val_coeff = cfg.algorithm.val_coeff
         self.aux_coeff = cfg.algorithm.aux_coeff
         self.task_coeff = cfg.algorithm.task_coeff
-        self.intr_coeff = cfg.algorithmintr_coeff
+        self.intr_coeff = cfg.algorithm.intr_coeff
+        self.target_kl = cfg.algorithm.target_kl
+        self.max_grad_norm = cfg.algorithm.max_grad_norm
 
-        self.optimizer = optim.Adam(params=self.agent.parameters(), lr=self.lr)
+        self.optimizer = optim.Adam(params=self.agent.parameters(), lr=self.learning_rate)
 
 
     def collect_rollout(self, obs: dict, done: torch.Tensor):
 
-        for _ in range(self.buffer.num_steps):
-
-            new_obs, _ = self.env.reset(done=done)
-            obs["rays"][done]    = new_obs["rays"][done]
-            obs["proprio"][done] = new_obs["proprio"][done]
-
-            action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
-            next_obs, reward, terminated, truncated, info = self.env.step(action)
-            done = terminated | truncated
-
-            with torch.no_grad():
-                bootstrap_val = self.agent.get_value(next_obs)
-            reward += self.gamma * bootstrap_val * truncated.float()
-
-            self.buffer.store(
-                obs=obs,
-                act=action,
-                logp=action_log_prob,
-                mu=action_mu,
-                std=action_std,
-                val=value,
-                done=terminated,
-                rew=reward
-            )
-
-            obs = next_obs
-
         with torch.no_grad():
+
+            for _ in range(self.buffer.num_steps):
+
+                new_obs, _ = self.env.reset(done=done)
+                obs["rays"][done]    = new_obs["rays"][done]
+                obs["proprio"][done] = new_obs["proprio"][done]
+
+                action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
+                next_obs, reward, terminated, truncated, info = self.env.step(action)
+                done = terminated | truncated
+
+                bootstrap_val = self.agent.get_value(next_obs)
+                reward += self.gamma * bootstrap_val * truncated.float()
+
+                self.buffer.store(
+                    obs=obs,
+                    act=action,
+                    logp=action_log_prob,
+                    mu=action_mu,
+                    std=action_std,
+                    val=value,
+                    done=terminated,
+                    rew=reward
+                )
+
+                obs = next_obs
+
             last_val = self.agent.get_value(obs)
-        self.buffer.compute_returns(last_val)
+            self.buffer.compute_returns(last_val)
 
         return obs, done, info
 
@@ -157,6 +162,18 @@ class MLPPPO(PPO):
                     done=flat_done[idx],
                 )
 
+    def evaluate_actions(self, obs: dict, actions: torch.Tensor):
+
+        h = self.agent(obs)
+        self.agent.actor.update_distribution(h)
+        logp = self.agent.actor.log_prob_action(actions)
+        mu = self.agent.actor.action_mean
+        std = self.agent.actor.action_std
+        entropy = self.agent.actor.entropy
+        val = self.agent.critic(h).squeeze(-1)
+
+        return logp, mu, std, entropy, val
+
     def compute_surrogate_loss(self, logp_batch, old_logp_batch, adv_batch):
         ratio = torch.exp(logp_batch - old_logp_batch)
         cliped_ratio = torch.clamp(ratio, 1 - self.clip_esilon, 1 + self.clip_esilon)
@@ -187,6 +204,17 @@ class MLPPPO(PPO):
 
         return kl_per_sample.mean()
 
+    def adjust_learning_rate(self, kl, current_lr, min_lr=1e-5, max_lr=1e-3):
+            """
+            Adjust learning rate according to KL divergence.
+            """
+            new_lr = current_lr
+            if kl > self.target_kl * 2.0:
+                new_lr = max(current_lr / 1.5, min_lr)
+            elif kl < self.target_kl / 1.5 and kl > 0:
+                new_lr = min(current_lr * 1.5, max_lr)
+            return new_lr
+
     def update(self):
 
         rollout_batch = self.buffer.get()
@@ -196,6 +224,7 @@ class MLPPPO(PPO):
         mean_surrogate_loss = 0
         mean_val_loss = 0
         mean_aux_loss = 0
+        mean_train_rew = 0
         num_updates = 0
 
         for mini_batch in self.sample_mini_batch(rollout_batch):
@@ -209,9 +238,12 @@ class MLPPPO(PPO):
             ret_batch      = mini_batch.ret
             adv_batch      = mini_batch.adv
 
-            logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.agent.evaluate_actions(obs_batch, act_batch)
+            logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.evaluate_actions(obs_batch, act_batch)
            
             kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
+            self.learning_rate = self.adjust_learning_rate(kl, self.learning_rate)
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = self.learning_rate
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
@@ -221,7 +253,7 @@ class MLPPPO(PPO):
 
             self.optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=0.5)
+            nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=self.max_grad_norm)
             self.optimizer.step()
 
             mean_kl += kl.item()
@@ -229,6 +261,7 @@ class MLPPPO(PPO):
             mean_val_loss += value_loss.item()
             mean_entropy += entropy_batch.mean().item()
             mean_aux_loss += intr_loss.item()
+            mean_train_rew += ret_batch.mean().item()
             num_updates += 1
 
         mean_kl /= num_updates
@@ -236,13 +269,15 @@ class MLPPPO(PPO):
         mean_val_loss /= num_updates
         mean_entropy /= num_updates
         mean_aux_loss /= num_updates
+        mean_train_rew /= num_updates
 
         return PPOUpdateStats(
             mean_kl=mean_kl,
             mean_surrogate_loss=mean_surrogate_loss,
             mean_value_loss=mean_val_loss,
             mean_entropy=mean_entropy,
-            mean_aux_loss=mean_aux_loss
+            mean_aux_loss=mean_aux_loss,
+            mean_train_rew=mean_train_rew
         )
 
     def evaluate_policy(self, num_episodes=5):
@@ -288,7 +323,6 @@ class MLPPPO(PPO):
             mean_eval_return, mean_eval_length = self.evaluate_policy()
             iteration = iter + 1
 
-            # TODO: Logging stats and evaluation on wandb
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
@@ -297,12 +331,23 @@ class MLPPPO(PPO):
             f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
             f"mean_value_loss={stats.mean_value_loss:.4f} "
             f"mean_entropy={stats.mean_entropy:.4f} "
+            f"mean_train_rew={stats.mean_train_rew:.4f} "
             f"eval_return={mean_eval_return:.4f} "
-            f"eval_length={mean_eval_length:.2f}"
-            #f"agent_pos={info['agent_pos']}"
-            #f"last_turning={info['last_turning']}"
-           # f"last_speed={info['last_speed']}"
-        )
+            f"eval_length={mean_eval_length:.2f} "
+            )
+
+            if wandb.run is not None:
+                wandb.log({
+                    "Global Std": self.agent.actor.action_std.mean().item(),
+                    "Mean KL-Divergence": stats.mean_kl,
+                    "Mean Surrogate Loss": stats.mean_surrogate_loss,
+                    "Mean Value Loss": stats.mean_value_loss,
+                    "Mean Entropy": stats.mean_entropy,
+                    "Mean Train Return": stats.mean_train_rew,
+                    "Mean Eval Return": mean_eval_return,
+                    "Mean Eval Length": mean_eval_length
+                })
+
             if run_dir is not None:
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
                     model_path = run_dir / f"iter_{iteration}.pt"
@@ -414,7 +459,7 @@ class RecuurentPPO(MLPPPO):
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.agent.evaluate_actions(
                 obs_batch,
                 (initial_lstm_state[0][:, mini_batch_env_ids], initial_lstm_state[1][:, mini_batch_env_ids]),
-                done_batch
+                done_batch, act_batch
             )
 
             kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)

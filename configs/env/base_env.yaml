@@ -15,5 +15,5 @@ goal_pos: {"x": 10.0, "y": 10.0}
 
 
 num_envs: 32
-gamma: 0.9
+gamma: 0.99
 goal_radius: 4.0      # distance threshold to count as reaching the goal
