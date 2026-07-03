@@ -1,7 +1,9 @@
+import io
 import gymnasium as gym
 import numpy as np
 import torch
 import pygame
+import imageio.v3 as iio
 from .navigation_env import NavigationEnvEasy
 from models.embeddings.simple import MLPObservationEmbeddings
 from models.backbones.mlp_backbone import MLPBackbone
@@ -88,6 +90,42 @@ class NavigationEnvSB3(gym.Env):
 
         pygame.display.flip()
         self.clock.tick(5)
+
+    def record_frame(self, obs: np.ndarray) -> np.ndarray:
+        _SCREEN  = 900
+        _WORLD   = 100.0
+        _PADDING = 60
+
+        flat_ray_dim = int(np.prod(self._ray_dim))
+        rays = obs[:flat_ray_dim].reshape(self._ray_dim)
+
+        if not hasattr(self, '_rec_screen'):
+            pygame.init()
+            self._rec_screen = pygame.Surface((_SCREEN, _SCREEN))
+
+        scale = (_SCREEN - 2 * _PADDING) / _WORLD
+        self._rec_screen.fill((255, 255, 255))
+
+        for start, end in self._env.walls:
+            pygame.draw.line(self._rec_screen, (0, 0, 0),
+                             w2s(start, scale, _SCREEN, _PADDING),
+                             w2s(end,   scale, _SCREEN, _PADDING), 2)
+
+        pygame.draw.circle(self._rec_screen, (0, 100, 255),
+                           w2s(self._env.agent_pos[0], scale, _SCREEN, _PADDING), 6)
+        pygame.draw.circle(self._rec_screen, (0, 255, 0),
+                           w2s(self._env.goal_pos, scale, _SCREEN, _PADDING), 8)
+
+        intersect, _, _ = self._env.ray_cast.scan(self._env.agent_pos, self._env.facing_direction)
+        agent_screen = w2s(self._env.agent_pos[0], scale, _SCREEN, _PADDING)
+        for i, ray in enumerate(intersect[0]):
+            color = rays[4:, i]
+            pygame.draw.line(self._rec_screen,
+                             (int(color[0]*255), int(color[1]*255), int(color[2]*255)),
+                             agent_screen, w2s(ray, scale, _SCREEN, _PADDING), 1)
+
+        frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
+        return frame
 
 
 class MyBackbone(BaseFeaturesExtractor):

@@ -14,6 +14,9 @@ dependencies:
     - gymnasium>=0.29  
     - stable-baselines3 # optional — useful to cross-check your PPO/SAC impl
     - pygame
+    - tensorboard
+    - imageio
+    - imageio-ffmpeg
 
   # Config management
   - pip:
@@ -23,6 +26,7 @@ dependencies:
   # Logging & tracking
   - pip:
     - wandb            # experiment tracking, great for ablation sweeps
+    - wandb[media]
 
   # Viz & analysis
   - matplotlib

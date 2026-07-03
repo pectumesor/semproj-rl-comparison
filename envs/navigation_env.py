@@ -1,7 +1,9 @@
+import io
 import torch
 import numpy as np
 import gymnasium as gym
 import pygame
+import imageio.v3 as iio
 from omegaconf import DictConfig
 from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends, PerlinColor, w2s
 
@@ -97,8 +99,8 @@ class NavigationEnv(gym.Env):
         """
 
         self.action_space = gym.spaces.Box(
-            low=-1.0,
-            high=1.0,
+            low=cfg.env.action_low,
+            high=cfg.env.action_high,
             dtype=np.float32,
             shape=(self.act_dim,)
         )
@@ -142,13 +144,6 @@ class NavigationEnv(gym.Env):
         action: (num_envs, 2) tensor on device.
         Returns obs, reward, terminated, truncated, info — all tensors on device.
         """
-
-        # Clamp actions to environment bounds - Same way that SB3 handles this  
-        action = action.clamp(
-            torch.tensor(self.action_space.low, dtype=torch.float32, device=self.device),
-            torch.tensor(self.action_space.high, dtype=torch.float32, device=self.device)
-            )
-
         self.steps += 1
         truncated = self.steps >= self.max_steps
         self.steps[truncated] = 0
@@ -263,6 +258,39 @@ class NavigationEnv(gym.Env):
 
         pygame.display.flip()
         self.clock.tick(5)
+
+    def record_frame(self, obs):
+        _SCREEN  = 900
+        _WORLD   = 100.0
+        _PADDING = 60
+
+        if not hasattr(self, '_rec_screen'):
+            pygame.init()
+            self._rec_screen = pygame.Surface((_SCREEN, _SCREEN))
+
+        scale = (_SCREEN - 2 * _PADDING) / _WORLD
+        self._rec_screen.fill((255, 255, 255))
+
+        for start, end in self.walls:
+            pygame.draw.line(self._rec_screen, (0, 0, 0),
+                             w2s(start, scale, _SCREEN, _PADDING),
+                             w2s(end,   scale, _SCREEN, _PADDING), 2)
+
+        pygame.draw.circle(self._rec_screen, (0, 100, 255),
+                           w2s(self.agent_pos[0], scale, _SCREEN, _PADDING), 6)
+        pygame.draw.circle(self._rec_screen, (0, 255, 0),
+                           w2s(self.goal_pos, scale, _SCREEN, _PADDING), 8)
+
+        intersect, _, _ = self.ray_cast.scan(self.agent_pos, self.facing_direction)
+        agent_screen = w2s(self.agent_pos[0], scale, _SCREEN, _PADDING)
+        for i, ray in enumerate(intersect[0]):
+            color = (obs["rays"][0, 4:, :].T)[i]
+            pygame.draw.line(self._rec_screen,
+                             (int(color[0]*255), int(color[1]*255), int(color[2]*255)),
+                             agent_screen, w2s(ray, scale, _SCREEN, _PADDING), 1)
+
+        frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
+        return frame
 
 class NavigationEnvEasy(NavigationEnv):
     """

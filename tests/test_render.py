@@ -1,9 +1,7 @@
 """
-Compare my own PPO implementation with Stable Baselines
-
+Load trained models and render rollouts. Optionally compile frames into a video.
 """
 import sys
-from datetime import datetime
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -11,42 +9,36 @@ sys.path.append(str(ROOT_DIR))
 
 import hydra
 from omegaconf import DictConfig
-# Architecture pieces
-from models import (MLPObservationEmbeddings,
-                    MLPBackbone, GuassianPolicyHead,
-                    ValueNet)
-# Agents
-from models import BaseAgent
-from algorithms import RolloutBuffer, MLPPPO
+import numpy as np
+import torch
+import torch.nn as nn
 
-#Env
+from models import MLPObservationEmbeddings, MLPBackbone, GuassianPolicyHead, ValueNet
+from models import PPOAgent
+from algorithms import RolloutBuffer, MLPPPO
 from envs import NavigationEnvEasy, compute_num_rays, NavigationEnvSB3, MyBackbone
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import numpy as np
-
-device = torch.device( "mps" if torch.backends.mps.is_available() 
-                      else "cuda" if torch.cuda.is_available()
-                      else "cpu" )
 device = torch.device("cpu")
 print(f"Using device: {device}")
 
+def save_video(frames: list, path: Path, fps: int = 10):
+    import imageio
+    path.parent.mkdir(parents=True, exist_ok=True)
+    imageio.mimsave(str(path), frames, fps=fps)
+    print(f"Saved video to {path}")
 
-@hydra.main( config_path="../configs", config_name="base", version_base=None)
+
+@hydra.main(config_path="../configs", config_name="test_algorithm", version_base=None)
 def main(cfg: DictConfig):
 
     num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
 
-    # Derive shapes from the env directly so they never go out of sync with navigation_env.py
     _probe = NavigationEnvEasy(cfg, None, num_rays, (1, num_rays), num_envs=1)
     _obs, _ = _probe.reset()
-    ray_dim     = tuple(_obs["rays"].shape[1:])    # (C, R)
-    proprio_dim = _obs["proprio"].shape[-1]         # 2
+    ray_dim     = tuple(_obs["rays"].shape[1:])
+    proprio_dim = _obs["proprio"].shape[-1]
     del _probe
 
     observation_model = MLPObservationEmbeddings(
@@ -54,103 +46,66 @@ def main(cfg: DictConfig):
         hidden_sizes=cfg.model.obs_embed_hidden_sizes,
         feature_dim=cfg.model.obs_embed_hidden_sizes[-1]
     )
-
     backbone_model = MLPBackbone(
         input_dim=cfg.model.obs_embed_hidden_sizes[-1],
         hidden_sizes=cfg.model.backbone_hidden_sizes,
         output_dim=cfg.model.backbone_hidden_sizes[-1]
     )
-
-    actor = GuassianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
+    actor  = GuassianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
                                 actions_dim=cfg.env.act_dim,
                                 hidden_sizes=cfg.model.policy_hidden_sizes)
+    critic = ValueNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
+                      hidden_sizes=cfg.model.value_hidden_sizes)
 
-    crtic = ValueNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
-                     hidden_sizes=cfg.model.value_hidden_sizes)
+    agent = PPOAgent(obs_embed_model=observation_model, backbone_model=backbone_model,
+                     actor=actor, critic=critic,
+                     action_low=cfg.env.action_low, action_high=cfg.env.action_high).to(device)
 
-    agent = BaseAgent(obs_embed_model=observation_model,
-                      backbone_model=backbone_model,
-                      actor=actor, critic=crtic).to(device)
+    buffer    = RolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device, cfg=cfg)
+    env       = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)
+    eval_env  = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)
+    algorithm = MLPPPO(buffer=buffer, device=device, env=env, eval_env=eval_env,
+                       agent=agent, cfg=cfg)
 
-    buffer = RolloutBuffer(ray_dim=ray_dim,
-                           proprio_dim=proprio_dim,
-                           act_dim=cfg.env.act_dim,
-                           num_steps=cfg.env.num_steps,
-                           num_envs=cfg.env.num_envs,
-                           gamma=cfg.env.gamma,
-                           gae_lambda=cfg.algorithms.gae_lambda,
-                           device=device)
-
-    env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)
-    eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)
-    
-    algorithm = MLPPPO(buffer=buffer,
-                       device=device,
-                       env=env,
-                       lr=cfg.model.lr,
-                       n_iterations=cfg.env.n_iterations,
-                       mini_batch=cfg.model.batch_size,
-                       n_epochs=cfg.env.n_epochs,
-                       agent=agent,
-                       gamma=cfg.env.gamma,
-                       gae_lambda=cfg.algorithms.gae_lambda,
-                       clip_epsilon=cfg.algorithms.clip_epsilon,
-                       entropy_coeff=cfg.algorithms.entropy_coeff,
-                       val_coeff=cfg.algorithms.val_coeff,
-                       aux_coeff=cfg.algorithms.aux_coeff,
-                       task_coeff=cfg.algorithms.task_coeff,
-                       intr_coeff=cfg.algorithms.intr_coeff,
-                       eval_env=eval_env,
-                       save_interval=cfg.model.save_interval
-                       )
-    
-    log_dir = ROOT_DIR / "logs" / "ppo"
+    log_dir  = ROOT_DIR / "logs" / "ppo"
     run_name = "26_06_26_15_44_30_model"
-    run_dir = log_dir / run_name
-    
-    agent.load_model(run_dir/"iter_100.pt", device, algorithm.optimizer)
+    run_dir  = log_dir / run_name
 
-    vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, ray_dim, proprio_dim), n_envs=1)
-
-    policy_kwargs = dict(
-        features_extractor_class=MyBackbone,
-        features_extractor_kwargs=dict(
-            features_dim=cfg.model.backbone_hidden_sizes[-1],
-            ray_dim=ray_dim,
-            proprio_dim=proprio_dim,
-            obs_embed_hidden_sizes=list(cfg.model.obs_embed_hidden_sizes),
-            backbone_hidden_sizes=list(cfg.model.backbone_hidden_sizes),
-        ),
-        net_arch=dict(pi=list(cfg.model.policy_hidden_sizes),
-                      vf=list(cfg.model.value_hidden_sizes)),
-        activation_fn=nn.ReLU,
-        share_features_extractor=True,
-    )
-
-    model = PPO.load(run_dir/"sb3.pt", env=vec_env)
-
-    obs=vec_env.reset()
-
-    total_reward = 0
-    for _ in range(100):
-        action,_ = model.predict(obs)
-        obs, reward, done,_ = vec_env.step(action)
-
-        if done:
-            obs = vec_env.reset()
-        vec_env.envs[0].unwrapped.render(obs[0], "SB3 Result")
-
-    total_reward = 0
+    agent.load_model(run_dir / "iter_100.pt", device, algorithm.optimizer)
     agent.eval()
-    obs, info = env.reset()
-    for _ in range(100):
-        action = agent.predict_action(obs)
-        obs, reward, done,_, info = env.step(action)
-        total_reward += reward
 
+    # --- Custom PPO rollout + video ---
+    frames_custom = []
+    obs, _ = env.reset()
+    for _ in range(200):
+        action = agent.predict_action(obs)
+        obs, _, done, _, _ = env.step(action)
+        frame = env.record_frame(obs)
+        print(f"Frame shape: {frame.shape} ")
+        print(f"Frame: {frame}")
+        
+        frames_custom.append(frame)
+        #env.render(obs, "Custom PPO")
         if done.any():
             obs, _ = env.reset()
-        env.render(obs, "Custom Algorithm Result")    
+
+    save_video(frames_custom, ROOT_DIR / "videos" / "custom_ppo.mp4")
+
+    # --- SB3 PPO rollout + video ---
+    vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg, num_rays, ray_dim, proprio_dim), n_envs=1)
+    model   = PPO.load(run_dir / "sb3.pt", env=vec_env)
+
+    frames_sb3 = []
+    obs = vec_env.reset()
+    for _ in range(200):
+        action, _ = model.predict(obs)
+        obs, _, done, _ = vec_env.step(action)
+        frames_sb3.append(vec_env.envs[0].unwrapped.record_frame(obs[0]))
+        #vec_env.envs[0].unwrapped.render({"rays": torch.tensor(obs)}, "SB3 PPO")
+        if done:
+            obs = vec_env.reset()
+
+    save_video(frames_sb3, ROOT_DIR / "videos" / "sb3_ppo.mp4")
 
 
 if __name__ == "__main__":

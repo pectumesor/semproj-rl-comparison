@@ -11,7 +11,7 @@ import torch.optim as optim
 import gymnasium as gym
 from tqdm import tqdm
 
-from models.agents import BaseAgent, RecurrentAgent
+from models.agents import PPOAgent, RecurrentPPOAgent
 
 @dataclass
 class PPOUpdateStats:
@@ -21,6 +21,8 @@ class PPOUpdateStats:
     mean_entropy: float
     mean_train_rew: float
     mean_aux_loss: float = 0
+    clip_fraction: float = 0
+    explained_variance: float = 0
     
 
 class PPO(ABC):
@@ -54,7 +56,7 @@ class MLPPPO(PPO):
     
     def __init__(self,
                 buffer: RolloutBuffer, device: torch.device,
-                env: gym.Env, eval_env: gym.Env, agent: BaseAgent | RecurrentAgent,
+                env: gym.Env, eval_env: gym.Env, agent: PPOAgent | RecurrentPPOAgent,
                 cfg: DictConfig
                 ):
         super().__init__()
@@ -69,7 +71,6 @@ class MLPPPO(PPO):
         self.agent = agent
 
         # -- Algorithm Configuration --
-        #         
         self.learning_rate = cfg.algorithm.lr
 
         # -- Training Iterations --
@@ -90,6 +91,7 @@ class MLPPPO(PPO):
         self.target_kl = cfg.algorithm.target_kl
         self.max_grad_norm = cfg.algorithm.max_grad_norm
 
+
         self.optimizer = optim.Adam(params=self.agent.parameters(), lr=self.learning_rate)
 
 
@@ -103,8 +105,8 @@ class MLPPPO(PPO):
                 obs["rays"][done]    = new_obs["rays"][done]
                 obs["proprio"][done] = new_obs["proprio"][done]
 
-                action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
-                next_obs, reward, terminated, truncated, info = self.env.step(action)
+                action, clipped_action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
+                next_obs, reward, terminated, truncated, info = self.env.step(clipped_action)
                 done = terminated | truncated
 
                 bootstrap_val = self.agent.get_value(next_obs)
@@ -117,7 +119,7 @@ class MLPPPO(PPO):
                     mu=action_mu,
                     std=action_std,
                     val=value,
-                    done=terminated,
+                    done=terminated | truncated,
                     rew=reward
                 )
 
@@ -164,6 +166,8 @@ class MLPPPO(PPO):
 
     def evaluate_actions(self, obs: dict, actions: torch.Tensor):
 
+        # Function only relevant to PPO so keep it here instead of in the Agent classes
+
         h = self.agent(obs)
         self.agent.actor.update_distribution(h)
         logp = self.agent.actor.log_prob_action(actions)
@@ -205,9 +209,6 @@ class MLPPPO(PPO):
         return kl_per_sample.mean()
 
     def adjust_learning_rate(self, kl, current_lr, min_lr=1e-5, max_lr=1e-3):
-            """
-            Adjust learning rate according to KL divergence.
-            """
             new_lr = current_lr
             if kl > self.target_kl * 2.0:
                 new_lr = max(current_lr / 1.5, min_lr)
@@ -225,7 +226,13 @@ class MLPPPO(PPO):
         mean_val_loss = 0
         mean_aux_loss = 0
         mean_train_rew = 0
+        mean_clip_fraction = 0
         num_updates = 0
+
+        flat_ret = rollout_batch.ret.reshape(-1)
+        flat_val = rollout_batch.val.reshape(-1)
+        var_returns = flat_ret.var()
+        explained_variance = (1 - (flat_ret - flat_val).var() / (var_returns + 1e-8)).item()
 
         for mini_batch in self.sample_mini_batch(rollout_batch):
 
@@ -239,11 +246,13 @@ class MLPPPO(PPO):
             adv_batch      = mini_batch.adv
 
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.evaluate_actions(obs_batch, act_batch)
-           
+
+            ratio = torch.exp(logp_batch - old_logp_batch)
             kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
-            self.learning_rate = self.adjust_learning_rate(kl, self.learning_rate)
-            for param_group in self.optimizer.param_groups:
-                param_group["lr"] = self.learning_rate
+            if self.target_kl is not None:
+                self.learning_rate = self.adjust_learning_rate(kl, self.learning_rate)
+                for param_group in self.optimizer.param_groups:
+                    param_group["lr"] = self.learning_rate
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
@@ -262,6 +271,7 @@ class MLPPPO(PPO):
             mean_entropy += entropy_batch.mean().item()
             mean_aux_loss += intr_loss.item()
             mean_train_rew += ret_batch.mean().item()
+            mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1
 
         mean_kl /= num_updates
@@ -270,6 +280,7 @@ class MLPPPO(PPO):
         mean_entropy /= num_updates
         mean_aux_loss /= num_updates
         mean_train_rew /= num_updates
+        mean_clip_fraction /= num_updates
 
         return PPOUpdateStats(
             mean_kl=mean_kl,
@@ -277,10 +288,12 @@ class MLPPPO(PPO):
             mean_value_loss=mean_val_loss,
             mean_entropy=mean_entropy,
             mean_aux_loss=mean_aux_loss,
-            mean_train_rew=mean_train_rew
+            mean_train_rew=mean_train_rew,
+            clip_fraction=mean_clip_fraction,
+            explained_variance=explained_variance,
         )
 
-    def evaluate_policy(self, num_episodes=5):
+    def evaluate_policy(self, num_episodes=20):
         if self.eval_env is None:
             return None, None
 
@@ -338,14 +351,17 @@ class MLPPPO(PPO):
 
             if wandb.run is not None:
                 wandb.log({
-                    "Global Std": self.agent.actor.action_std.mean().item(),
-                    "Mean KL-Divergence": stats.mean_kl,
-                    "Mean Surrogate Loss": stats.mean_surrogate_loss,
-                    "Mean Value Loss": stats.mean_value_loss,
-                    "Mean Entropy": stats.mean_entropy,
-                    "Mean Train Return": stats.mean_train_rew,
-                    "Mean Eval Return": mean_eval_return,
-                    "Mean Eval Length": mean_eval_length
+                    "Custom PPO/Global Std": self.agent.actor.action_std.mean().item(),
+                    "Custom PPO/Mean KL-Divergence": stats.mean_kl,
+                    "Custom PPO/Mean Surrogate Loss": stats.mean_surrogate_loss,
+                    "Custom PPO/Mean Value Loss": stats.mean_value_loss,
+                    "Custom PPO/Mean Entropy": stats.mean_entropy,
+                    "Custom PPO/Mean Train Return": stats.mean_train_rew,
+                    "Custom PPO/Mean Eval Return": mean_eval_return,
+                    "Custom PPO/Mean Eval Length": mean_eval_length,
+                    "Custom PPO/Learning Rate": self.learning_rate,
+                    "Custom PPO/Clip Fraction": stats.clip_fraction,
+                    "Custom PPO/Explained Variance": stats.explained_variance,
                 })
 
             if run_dir is not None:

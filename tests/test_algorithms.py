@@ -16,7 +16,7 @@ from models import (MLPObservationEmbeddings,
                     MLPBackbone, GuassianPolicyHead,
                     ValueNet, SquashedGaussianPolicyHead, DoubleQNet)
 # Agents
-from models import BaseAgent
+from models import PPOAgent, SACAgent
 from algorithms import RolloutBuffer, MLPPPO, MLPSAC, ReplayBuffer
 
 #Env
@@ -78,9 +78,9 @@ def main(cfg: DictConfig):
                             action_dim=cfg.env.act_dim,
                             hidden_sizes=cfg.model.value_hidden_sizes)
 
-    agent = BaseAgent(obs_embed_model=observation_model,
+    agent = PPOAgent(obs_embed_model=observation_model,
                       backbone_model=backbone_model,
-                      actor=actor, critic=critic).to(device)
+                      actor=actor, critic=critic, action_low=cfg.env.action_low, action_high=cfg.env.action_high).to(device)
 
     env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, cfg.env.num_envs, device=device).compile()
     eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1,               device=device).compile()

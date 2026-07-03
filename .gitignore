@@ -10,3 +10,6 @@ logs/
 
 # Wandb log files
 wandb/
+
+# Miscallaneous
+videos/
