@@ -72,7 +72,7 @@ class RolloutBuffer:
             self.adv_buf[step] = advantage
             self.ret_buf[step] = advantage + self.val_buf[step]
 
-        self.adv_buf = (self.adv_buf - self.adv_buf.mean()) / (self.adv_buf.std() + 1e-8)
+
 
     def get(self) -> RolloutBatch:
         if self.ptr != self.num_steps:

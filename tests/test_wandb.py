@@ -127,7 +127,7 @@ def main(cfg: DictConfig):
         
         algorithm.train(run_dir=run_dir)
 
-        model.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs,
+        model.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs, log_interval=1,
                     callback=WandbCallback(
                         gradient_save_freq=0,
                         verbose=2
@@ -139,7 +139,7 @@ def main(cfg: DictConfig):
         agent.eval()
 
         import imageio
-        video_dir = ROOT_DIR / "videos"
+        video_dir =  run_dir / "videos"
         video_dir.mkdir(parents=True, exist_ok=True)
 
         render_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)  # Compile breaks render function

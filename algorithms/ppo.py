@@ -245,6 +245,9 @@ class MLPPPO(PPO):
             ret_batch      = mini_batch.ret
             adv_batch      = mini_batch.adv
 
+            # Normalize adv_batch
+            adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8)
+
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.evaluate_actions(obs_batch, act_batch)
 
             ratio = torch.exp(logp_batch - old_logp_batch)
@@ -253,6 +256,7 @@ class MLPPPO(PPO):
                 self.learning_rate = self.adjust_learning_rate(kl, self.learning_rate)
                 for param_group in self.optimizer.param_groups:
                     param_group["lr"] = self.learning_rate
+
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
@@ -471,6 +475,8 @@ class RecuurentPPO(MLPPPO):
             adv_batch = mini_batch.adv
             done_batch = mini_batch.done
 
+            # Normalize advantage
+            adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8) 
 
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.agent.evaluate_actions(
                 obs_batch,

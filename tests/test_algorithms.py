@@ -23,7 +23,7 @@ from algorithms import RolloutBuffer, MLPPPO, MLPSAC, ReplayBuffer
 from envs import NavigationEnvEasy, compute_num_rays, NavigationEnvSB3, MyBackbone
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.env_util import make_vec_env
-
+from ..utils.factory import create_ppo_agent, create_sac_agent
 
 import torch
 import torch.nn as nn
@@ -49,39 +49,12 @@ def main(cfg: DictConfig):
     proprio_dim = _obs["proprio"].shape[-1]         # 2
     del _probe
 
-    observation_model = MLPObservationEmbeddings(
-        input_dim=int(np.prod(ray_dim)) + proprio_dim,
-        hidden_sizes=cfg.model.obs_embed_hidden_sizes,
-        feature_dim=cfg.model.obs_embed_hidden_sizes[-1]
-    )
-
-    backbone_model = MLPBackbone(
-        input_dim=cfg.model.obs_embed_hidden_sizes[-1],
-        hidden_sizes=cfg.model.backbone_hidden_sizes,
-        output_dim=cfg.model.backbone_hidden_sizes[-1]
-    )
-
     if cfg.algorithm.name == "ppo":
-        actor = GuassianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
-                                actions_dim=cfg.env.act_dim,
-                                hidden_sizes=cfg.model.policy_hidden_sizes)
-        
-        critic = ValueNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
-                     hidden_sizes=cfg.model.value_hidden_sizes)
+        agent = create_ppo_agent("MLP", "MLP", ray_dim, proprio_dim, cfg).to(device)
     else:
+        agent = create_sac_agent("MLP", "MLP", ray_dim, proprio_dim, cfg).to(device)
 
-        actor = SquashedGaussianPolicyHead(backbone_dim=cfg.model.backbone_hidden_sizes[-1],
-                                           action_dim=cfg.env.act_dim,
-                                           hidden_sizes=cfg.model.policy_hidden_sizes)
-        
-        critic = DoubleQNet(backbone_dim=cfg.model.backbone_hidden_sizes[-1], 
-                            action_dim=cfg.env.act_dim,
-                            hidden_sizes=cfg.model.value_hidden_sizes)
-
-    agent = PPOAgent(obs_embed_model=observation_model,
-                      backbone_model=backbone_model,
-                      actor=actor, critic=critic, action_low=cfg.env.action_low, action_high=cfg.env.action_high).to(device)
-
+    
     env      = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, cfg.env.num_envs, device=device).compile()
     eval_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1,               device=device).compile()
 
