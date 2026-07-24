@@ -13,7 +13,7 @@ class NavigationEnv(gym.Env):
 
     All state is stored as on-device tensors. reset() and step() return tensors.
 
-    Observation rays per env: (7, num_rays)
+    Observation rays: (num_envs, 7, num_rays)
         channel 0 — no_hit indicator
         channel 1 — goal_hit indicator  (ray-circle test; not a wall cast)
         channel 2 — wall_hit indicator
@@ -291,6 +291,21 @@ class NavigationEnv(gym.Env):
 
         frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
         return frame
+
+
+    def record_rollout(self, agent, steps):
+
+        frames = []
+        obs, _ = self.reset()
+        for _ in range(steps):
+            action = agent.predict_action(obs)
+            obs, _, done, _, _ = self.step(action)
+            frames.append(self.record_frame(obs))
+
+        if done.any():
+            obs, _ = self.reset()
+
+        return frames
 
 class NavigationEnvEasy(NavigationEnv):
     """

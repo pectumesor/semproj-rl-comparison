@@ -6,7 +6,7 @@ import numpy as np
 from omegaconf import DictConfig
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer
+from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer, RecurrentRolloutBuffer
 import torch.optim as optim
 import gymnasium as gym
 from tqdm import tqdm
@@ -373,14 +373,13 @@ class MLPPPO(PPO):
                     model_path = run_dir / f"iter_{iteration}.pt"
                     self.agent.save_model(model_path, self.optimizer)
 
-    
-
 class RecuurentPPO(MLPPPO):
-    def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
+    def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, rollout_buffer:  RecurrentRolloutBuffer, **kwargs):
         super().__init__(**kwargs)
 
         self.num_layers = num_layers
         self.hidden_size = hidden_size
+        self.buffer = rollout_buffer
         if self.buffer.num_envs % num_minibatches != 0:
             raise ValueError(
                 f"For RecurrentPPO, it must hold that num_evs % num_minibatches == 0 "
@@ -388,47 +387,47 @@ class RecuurentPPO(MLPPPO):
             )
         else:
               self.mini_batch = self.buffer.num_envs // num_minibatches
-
-    
+ 
     def collect_rollout(self, obs: torch.Tensor, lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
         
         rollout_bar = tqdm(iterable=range(self.buffer.num_steps), total=self.buffer.num_steps,
                            desc="Colleting Rollouts")
-        
-        for _ in rollout_bar:
-            action, action_log_prob, action_mu, action_std, value, lstm_state = self.agent.select_action(obs, lstm_state, done)
-            next_obs_np, reward, terminated, truncated, info = self.env.step(action.cpu().numpy())
-
-            next_obs = torch.as_tensor(next_obs_np, dtype=torch.float, device=self.device)
-            reward = torch.as_tensor(reward, dtype=torch.float, device=self.device)
-            terminated = torch.as_tensor(terminated, dtype=torch.bool, device=self.device)
-            truncated = torch.as_tensor(truncated, dtype=torch.bool, device=self.device)
-            done = terminated | truncated
-
-            # Bootstrap value for timed-out episodes to avoid treating timeout as a true terminal
-            if truncated.any():
-                with torch.no_grad():
-                    bootstrap_val = self.agent.get_value(next_obs, lstm_state, truncated)
-                reward[truncated] += self.gamma * bootstrap_val[truncated]
-
-            self.buffer.store(
-                obs=obs,
-                act=action,
-                logp=action_log_prob,
-                mu=action_mu,
-                std=action_std,
-                val=value,
-                done=terminated,
-                rew=reward
-            )
-
-            obs = next_obs
-
+    
         with torch.no_grad():
-            last_val = self.agent.get_value(obs, lstm_state, done)
-        self.buffer.compute_returns(last_val)
+            for _ in rollout_bar:
 
-        return obs, lstm_state, done
+                new_obs, _ = self.env.reset(done=done)
+                obs["rays"][done]    = new_obs["rays"][done]
+                obs["proprio"][done] = new_obs["proprio"][done]
+
+                (action, action_clipped,
+                    action_log_prob, action_mu, action_std,
+                    value, lstm_state) = self.agent.select_action(obs, lstm_state, done)
+                next_obs, reward, terminated, truncated, info = self.env.step(action_clipped)
+                done = terminated | truncated
+
+                bootstrap_val = self.agent.get_value(next_obs)
+                reward += self.gamma * bootstrap_val * truncated.float()
+
+
+                #TODO: Adjust to Reccurrent Buffer
+                self.buffer.store(
+                    obs=obs,
+                    act=action,
+                    logp=action_log_prob,
+                    mu=action_mu,
+                    std=action_std,
+                    val=value,
+                    done=terminated,
+                    rew=reward
+                )
+
+                obs = next_obs
+
+            last_val = self.agent.get_value(obs)
+            self.buffer.compute_returns(last_val)
+
+        return obs, lstm_state, done, info
 
     def sample_mini_batch(self, batch: RolloutBatch):
         # Shuffle env axis only — preserves temporal ordering needed for BPTT
@@ -516,7 +515,6 @@ class RecuurentPPO(MLPPPO):
             mean_value_loss=mean_val_loss,
             mean_entropy=mean_entropy,
             mean_aux_loss=mean_aux_loss)
-
     
     def evaluate_policy(self, num_episodes=5):
         if self.eval_env is None:
@@ -569,7 +567,6 @@ class RecuurentPPO(MLPPPO):
                          dtype=torch.float, device=self.device)
         )
 
-        # Carry hidden state across rollouts for inference; re-init to zeros for each update pass
         rollout_lstm_state = initial_lstm_state
 
         iterations_bar = tqdm(iterable=range(self.n_iterations), total=self.n_iterations, 

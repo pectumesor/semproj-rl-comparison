@@ -11,6 +11,9 @@ max_range: 5.0
 ray_density: 0.2
 fov: 180
 
+ray_encoding: 7
+proprio_dim: 2
+
 
 init_pos: {"x": 50.0, "y": 50.0}
 goal_pos: {"x": 10.0, "y": 10.0}

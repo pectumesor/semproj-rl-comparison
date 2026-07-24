@@ -6,6 +6,7 @@ from ..heads import GuassianPolicyHead, SquashedGaussianPolicyHead, DoubleQNet, 
 from pathlib import Path
 from .base_agent import BaseAgent
 from .recurrent_agent import RecurrentAgent
+from typing import Optional, Tuple
 
 
 """
@@ -81,5 +82,17 @@ class PPOAgent(BaseAgent):
 
 class RecurrentPPOAgent(RecurrentAgent):
 
-    def __init__(self, obs_embed_model, backbone_model, actor, critic):
+    def __init__(self, obs_embed_model, backbone_model, actor, critic, action_low, action_high ):
         super().__init__(obs_embed_model, backbone_model, actor, critic)
+
+        self.action_low = action_low
+        self.action_high = action_high
+
+    def select_action(self, obs: torch.Tensor, 
+                      lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
+        with torch.no_grad():
+            action, action_log_prob, action_mu, action_std, value, lstm_state = super().select_action(obs, lstm_state, done)
+            action_clipped = action.clamp(min=self.action_low, max=self.action_high)
+       
+        return action, action_clipped, action_log_prob, action_mu, action_std, value, lstm_state
+

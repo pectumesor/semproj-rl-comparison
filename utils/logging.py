@@ -1,19 +1,10 @@
 # utils/logging.py
 import wandb
+from pathlib import Path
 from omegaconf import OmegaConf
 
-def init_wandb(cfg):
-    wandb.init(
-        project=cfg.wandb.project,
-        entity=cfg.wandb.entity,
-        group=cfg.wandb.group,
-        tags=cfg.wandb.tags,
-        mode=cfg.wandb.mode,
-        config=OmegaConf.to_container(cfg, resolve=True),  # logs full hydra config
-    )
-
-def log(metrics: dict, step: int):
-    wandb.log(metrics, step=step)
-
-def finish():
-    wandb.finish()
+def save_video(frames: list, path: Path, fps: int = 10):
+    import imageio
+    path.parent.mkdir(parents=True, exist_ok=True)
+    imageio.mimsave(str(path), frames, fps=fps)
+    print(f"Saved video to {path}")

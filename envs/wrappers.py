@@ -10,6 +10,7 @@ from models.backbones.mlp_backbone import MLPBackbone
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from .env_utils import w2s
 
+
 class NavigationEnvSB3(gym.Env):
     """
     Single-env wrapper around NavigationEnv for Stable Baselines 3.
@@ -127,6 +128,19 @@ class NavigationEnvSB3(gym.Env):
         frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
         return frame
 
+
+    def record_rollout(self, agent, steps):
+        frames = []
+        obs, _ = self.reset()
+        for _ in range(steps):
+            action, _ = agent.predict(obs)
+            obs, _, done, _, _ = self.step(action)
+            frames.append(self.record_frame(obs))
+
+        if done:
+            obs, _ = self.reset()
+        
+        return frames
 
 class MyBackbone(BaseFeaturesExtractor):
     """

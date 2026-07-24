@@ -1,6 +1,6 @@
 defaults:
   - algorithm: ppo
-  - env: base_env
+  - env: easy_env
   - model: base_model
   - _self_
 

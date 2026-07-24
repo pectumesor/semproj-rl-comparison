@@ -33,17 +33,17 @@ class RolloutBuffer:
         self.device     = device
         self.ptr        = 0
 
-        self.rays_buf   = torch.zeros((self.num_steps, self.num_envs, *ray_dim),        dtype=torch.float, device=device)
+        self.rays_buf    = torch.zeros((self.num_steps, self.num_envs, *ray_dim),        dtype=torch.float, device=device)
         self.proprio_buf = torch.zeros((self.num_steps, self.num_envs, proprio_dim),    dtype=torch.float, device=device)
-        self.act_buf    = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
-        self.logp_buf   = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
-        self.mu_buf     = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
-        self.std_buf    = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
-        self.val_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
-        self.done_buf   = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.bool,  device=device)
-        self.rew_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
-        self.ret_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
-        self.adv_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.act_buf     = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.logp_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.mu_buf      = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.std_buf     = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.val_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.done_buf    = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.bool,  device=device)
+        self.rew_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.ret_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.adv_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
 
        
 
@@ -94,3 +94,8 @@ class RolloutBuffer:
         )
         self.ptr = 0
         return batch
+
+
+class RecurrentRolloutBuffer(RolloutBuffer):
+    def __init__(self, ray_dim, proprio_dim, device, cfg):
+        super().__init__(ray_dim, proprio_dim, device, cfg)

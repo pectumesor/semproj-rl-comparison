@@ -28,12 +28,12 @@ class SimpleLSTM(nn.Module):
         hidden = input_feats.reshape((-1, batch_size, self.lstm.input_size))
         done = done.reshape((-1, batch_size))
         new_hidden = []
-        for h,d in zip(hidden, done):
+        for features, episode_start in zip(hidden, done):
             h, lstm_state = self.lstm(
-                h.unsqueeze(0), # Shape: (1, batch_size, feature_dim)
+                features.unsqueeze(0), # Shape: (1, batch_size, feature_dim)
                 (
-                (1.0 - d).view(1,-1,1) * lstm_state[0],
-                (1.0 - d).view(1,-1,1) * lstm_state[1],
+                (1.0 - episode_start).view(1,batch_size,1) * lstm_state[0],
+                (1.0 - episode_start).view(1,batch_size,1) * lstm_state[1],
                 ),
             )
             new_hidden += [h]

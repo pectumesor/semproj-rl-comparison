@@ -3,10 +3,10 @@ import torch.nn as nn
 from envs.env_utils import *
 from typing import Optional, Tuple
 from ..heads import GuassianPolicyHead
-
+from backbones import SimpleLSTM
 class RecurrentAgent(nn.Module):
     def __init__(self,
-                 obs_embed_model: nn.Module, backbone_model: nn.Module,
+                 obs_embed_model: nn.Module, backbone_model: SimpleLSTM,
                  actor: GuassianPolicyHead, critic: nn.Module):
         
         self.obs_embed_model = obs_embed_model
@@ -14,11 +14,11 @@ class RecurrentAgent(nn.Module):
         self.actor = actor
         self.critic = critic
 
-    def forward(self, obs: torch.Tensor,
+    def forward(self, obs,
                 lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
-
-        obs_feat = self.obs_backbone(obs)
-        hidden, new_lstm_state = self.policy_backbone(obs_feat, lstm_state, done)
+        
+        obs_feat = self.obs_embed_model(obs['rays'], obs['proprio'])
+        hidden, new_lstm_state = self.backbone_model(obs_feat, lstm_state, done)
         return hidden, new_lstm_state
     
     def select_action(self, obs: torch.Tensor, 

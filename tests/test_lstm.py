@@ -17,8 +17,8 @@ from models import (MLPObservationEmbeddings,
                     MLPBackbone, GuassianPolicyHead,
                     ValueNet)
 # Agents
-from models import PPOAgent
-from algorithms import RolloutBuffer, MLPPPO
+from models import PPOAgent, RecurrentPPOAgent
+from algorithms import RolloutBuffer, MLPPPO, RecuurentPPO
 from utils import create_ppo_agent, create_sb3_ppo_agent, save_video
 
 #Env
@@ -50,7 +50,7 @@ def main(cfg: DictConfig):
         num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
         ray_dim = np.array([cfg.env.ray_encoding, num_rays])
 
-        agent = create_ppo_agent("MLP","MLP", ray_dim, cfg).to(device)
+        agent = create_ppo_agent("MLP","LSTM", ray_dim, cfg).to(device)
 
         env   = NavigationEnvEasy(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=ray_dim,
                                            num_envs=cfg.env.num_envs, device=device).compile()
@@ -64,7 +64,7 @@ def main(cfg: DictConfig):
                                                           ray_dim=ray_dim,
                                                            proprio_dim=4), n_envs=cfg.env.num_envs)
 
-        sb3_agent = create_sb3_ppo_agent("MLP", cfg, ray_dim, vec_env)
+        sb3_agent = create_sb3_ppo_agent("LSTM", cfg, ray_dim, vec_env)
 
         log_dir = ROOT_DIR / "logs" / f"{cfg.algorithm.name}"
         run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
@@ -77,9 +77,8 @@ def main(cfg: DictConfig):
                         gradient_save_freq=0,
                         verbose=2
                     ))
-
+        
         sb3_agent.save(run_dir / f"sb3.pt")
-
 
         agent.load_model(run_dir / f"iter_{cfg.algorithm.n_iterations}.pt", device, algorithm.optimizer)
         agent.eval()
@@ -91,7 +90,7 @@ def main(cfg: DictConfig):
         save_video(frames, custom_video_path)
 
         # --- SB3 PPO rollout + video ---
-        sb3_env   = NavigationEnvSB3(cfg, num_rays, ray_dim, cfg.env.proprio_dim)
+        sb3_env   = NavigationEnvSB3(cfg, num_rays, cfg.env.ray_dim, cfg.env.proprio_dim)
         sb3_agent = PPO.load(run_dir / "sb3.pt", env=sb3_env)
 
         frames_sb3 = sb3_env.record_rollout(sb3_agent, 200)
