@@ -66,7 +66,8 @@ def create_ppo_agent(observation_type: str, backbone_type: str, ray_dim: tuple, 
     else:
         return RecurrentPPOAgent(obs_embed_model= observation_model,
                                  backbone_model= backbone_model,
-                                 actor=actor, critic=critic)
+                                 actor=actor, critic=critic,
+                                 action_low=cfg.env.action_low, action_high=cfg.env.action_high)
 
 def create_sac_agent(observation_type: str, backbone_type: str, ray_dim:int, cfg: DictConfig):
      

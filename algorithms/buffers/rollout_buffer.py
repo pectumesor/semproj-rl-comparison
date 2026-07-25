@@ -94,8 +94,3 @@ class RolloutBuffer:
         )
         self.ptr = 0
         return batch
-
-
-class RecurrentRolloutBuffer(RolloutBuffer):
-    def __init__(self, ray_dim, proprio_dim, device, cfg):
-        super().__init__(ray_dim, proprio_dim, device, cfg)

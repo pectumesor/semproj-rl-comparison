@@ -1,0 +1,10 @@
+defaults:
+  - ppo
+  - _self_
+
+name: recurrent_ppo
+num_layers: 2
+hidden_size: 64
+
+# num_minibatches needs to be able to divide num_envs
+num_minibatches: 64

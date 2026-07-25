@@ -1,0 +1,18 @@
+defaults:
+  - algorithm: recurrent_ppo
+  - env: easy_env
+  - model: base_model
+  - _self_
+
+wandb:
+  project: semproj
+  entity: eazevedo-eth-z-rich
+  group: test        
+  tags: [ppo]
+  mode: online       # online | offline | disabled
+
+seed: 42
+
+
+
+

@@ -39,9 +39,6 @@ class ReplayBuffer:
         self.rew_buf = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float32, device=device)
         self.done_buf = torch.zeros((self.num_steps,  self.num_envs), dtype=torch.bool, device=device)
 
-
-        
-      
     
     def store(
             self,

@@ -39,7 +39,7 @@ device = torch.device( "mps" if torch.backends.mps.is_available()
 print(f"Using device: {device}")
 
 
-@hydra.main( config_path="../configs", config_name="test_wandb", version_base=None)
+@hydra.main( config_path="../configs", config_name="test_recurrent", version_base=None)
 def main(cfg: DictConfig):
 
     wandb.login()
@@ -57,7 +57,12 @@ def main(cfg: DictConfig):
         eval_env = NavigationEnvEasy(cfg=cfg, agent=agent, num_rays=num_rays, 
                                      obs_dim=ray_dim, num_envs=1, device=device).compile()
         buffer = RolloutBuffer(ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim, device=device,cfg=cfg)
-        algorithm = MLPPPO(buffer=buffer,device=device,env=env,eval_env=eval_env, agent=agent, cfg=cfg)
+
+
+        algorithm = RecuurentPPO(num_layers=cfg.algorithm.num_layers, hidden_size=cfg.algorithm.hidden_size,
+                                 num_minibatches=cfg.algorithm.num_minibatches,
+                                 buffer=buffer, device=device, env=env, eval_env=eval_env,
+                                agent=agent, cfg=cfg)
 
         vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg=cfg,
                                                          num_rays=num_rays,
@@ -72,11 +77,8 @@ def main(cfg: DictConfig):
         
         algorithm.train(run_dir=run_dir)
         
-        sb3_agent.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs, log_interval=1,
-                    callback=WandbCallback(
-                        gradient_save_freq=0,
-                        verbose=2
-                    ))
+        sb3_agent.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs,
+                         log_interval=1)
         
         sb3_agent.save(run_dir / f"sb3.pt")
 

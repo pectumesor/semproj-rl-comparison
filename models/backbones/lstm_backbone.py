@@ -26,7 +26,7 @@ class SimpleLSTM(nn.Module):
 
         batch_size = lstm_state[0].shape[1]
         hidden = input_feats.reshape((-1, batch_size, self.lstm.input_size))
-        done = done.reshape((-1, batch_size))
+        done = done.reshape((-1, batch_size)).float()
         new_hidden = []
         for features, episode_start in zip(hidden, done):
             h, lstm_state = self.lstm(

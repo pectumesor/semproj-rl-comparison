@@ -3,12 +3,13 @@ import torch.nn as nn
 from envs.env_utils import *
 from typing import Optional, Tuple
 from ..heads import GuassianPolicyHead
-from backbones import SimpleLSTM
+from ..backbones import SimpleLSTM
+
 class RecurrentAgent(nn.Module):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: SimpleLSTM,
                  actor: GuassianPolicyHead, critic: nn.Module):
-        
+        super().__init__()
         self.obs_embed_model = obs_embed_model
         self.backbone_model = backbone_model
         self.actor = actor
@@ -17,7 +18,10 @@ class RecurrentAgent(nn.Module):
     def forward(self, obs,
                 lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
         
-        obs_feat = self.obs_embed_model(obs['rays'], obs['proprio'])
+        rays = obs['rays'].reshape(-1, *obs['rays'].shape[-2:])
+        proprio = obs['proprio'].reshape(-1, obs['proprio'].shape[-1])
+        obs_feat = self.obs_embed_model(rays, proprio)
+
         hidden, new_lstm_state = self.backbone_model(obs_feat, lstm_state, done)
         return hidden, new_lstm_state
     
@@ -44,12 +48,13 @@ class RecurrentAgent(nn.Module):
         return self.critic(hidden).squeeze(-1)
     
     def evaluate_actions(self, obs: torch.Tensor, 
-                            lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor,
-                         actions: torch.Tensor):
+                        lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor,
+                        actions: torch.Tensor):
         
         h, _ = self.forward(obs,
                               (lstm_state[0], lstm_state[1]),
                               done)
+        
         self.actor.update_distribution(h)
         logp = self.actor.log_prob_action(actions)
         mu = self.actor.action_mean

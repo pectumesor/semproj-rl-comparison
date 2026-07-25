@@ -82,7 +82,10 @@ class PPOAgent(BaseAgent):
 
 class RecurrentPPOAgent(RecurrentAgent):
 
-    def __init__(self, obs_embed_model, backbone_model, actor, critic, action_low, action_high ):
+    def __init__(self, obs_embed_model,
+                  backbone_model, actor, critic, 
+                  action_low, action_high):
+        
         super().__init__(obs_embed_model, backbone_model, actor, critic)
 
         self.action_low = action_low

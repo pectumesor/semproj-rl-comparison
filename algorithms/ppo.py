@@ -6,7 +6,7 @@ import numpy as np
 from omegaconf import DictConfig
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer, RecurrentRolloutBuffer
+from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer
 import torch.optim as optim
 import gymnasium as gym
 from tqdm import tqdm
@@ -128,7 +128,7 @@ class MLPPPO(PPO):
             last_val = self.agent.get_value(obs)
             self.buffer.compute_returns(last_val)
 
-        return obs, done, info
+        return obs, done
 
     def sample_mini_batch(self, batch: RolloutBatch):
         total_samples = self.buffer.num_steps * self.buffer.num_envs
@@ -335,7 +335,7 @@ class MLPPPO(PPO):
 
         for iter in tqdm(range(self.n_iterations), desc="Training"):
 
-            obs, done, info = self.collect_rollout(obs, done)
+            obs, done = self.collect_rollout(obs, done)
             stats = self.update()
             mean_eval_return, mean_eval_length = self.evaluate_policy()
             iteration = iter + 1
@@ -374,12 +374,11 @@ class MLPPPO(PPO):
                     self.agent.save_model(model_path, self.optimizer)
 
 class RecuurentPPO(MLPPPO):
-    def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, rollout_buffer:  RecurrentRolloutBuffer, **kwargs):
+    def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
         super().__init__(**kwargs)
 
         self.num_layers = num_layers
         self.hidden_size = hidden_size
-        self.buffer = rollout_buffer
         if self.buffer.num_envs % num_minibatches != 0:
             raise ValueError(
                 f"For RecurrentPPO, it must hold that num_evs % num_minibatches == 0 "
@@ -389,12 +388,9 @@ class RecuurentPPO(MLPPPO):
               self.mini_batch = self.buffer.num_envs // num_minibatches
  
     def collect_rollout(self, obs: torch.Tensor, lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
-        
-        rollout_bar = tqdm(iterable=range(self.buffer.num_steps), total=self.buffer.num_steps,
-                           desc="Colleting Rollouts")
     
         with torch.no_grad():
-            for _ in rollout_bar:
+            for _ in range(self.buffer.num_steps):
 
                 new_obs, _ = self.env.reset(done=done)
                 obs["rays"][done]    = new_obs["rays"][done]
@@ -406,11 +402,9 @@ class RecuurentPPO(MLPPPO):
                 next_obs, reward, terminated, truncated, info = self.env.step(action_clipped)
                 done = terminated | truncated
 
-                bootstrap_val = self.agent.get_value(next_obs)
+                bootstrap_val = self.agent.get_value(next_obs, lstm_state, done)
                 reward += self.gamma * bootstrap_val * truncated.float()
 
-
-                #TODO: Adjust to Reccurrent Buffer
                 self.buffer.store(
                     obs=obs,
                     act=action,
@@ -424,12 +418,12 @@ class RecuurentPPO(MLPPPO):
 
                 obs = next_obs
 
-            last_val = self.agent.get_value(obs)
+            last_val = self.agent.get_value(obs, lstm_state, done)
             self.buffer.compute_returns(last_val)
 
-        return obs, lstm_state, done, info
+        return obs, lstm_state, done
 
-    def sample_mini_batch(self, batch: RolloutBatch):
+    def sample_mini_batch(self, mini_batch: RolloutBatch):
         # Shuffle env axis only — preserves temporal ordering needed for BPTT
         for _ in range(self.n_epochs):
             env_ids = torch.randperm(self.buffer.num_envs, device=self.device)
@@ -439,17 +433,17 @@ class RecuurentPPO(MLPPPO):
                 mini_batch_envs_ids = env_ids[start:end]
 
                 yield (RolloutBatch(
-                    obs=batch.obs[:, mini_batch_envs_ids],
-                    act=batch.act[:, mini_batch_envs_ids],
-                    logp=batch.logp[:, mini_batch_envs_ids],
-                    mu=batch.mu[:, mini_batch_envs_ids],
-                    std=batch.std[:, mini_batch_envs_ids],
-                    val=batch.val[:, mini_batch_envs_ids],
-                    ret=batch.ret[:, mini_batch_envs_ids],
-                    adv=batch.adv[:, mini_batch_envs_ids],
-                    done=batch.done[:, mini_batch_envs_ids]
+                    rays=mini_batch.rays[:, mini_batch_envs_ids],
+                    proprio=mini_batch.proprio[:, mini_batch_envs_ids],
+                    act=mini_batch.act[:, mini_batch_envs_ids],
+                    logp=mini_batch.logp[:, mini_batch_envs_ids],
+                    mu=mini_batch.mu[:, mini_batch_envs_ids],
+                    std=mini_batch.std[:, mini_batch_envs_ids],
+                    val=mini_batch.val[:, mini_batch_envs_ids],
+                    ret=mini_batch.ret[:, mini_batch_envs_ids],
+                    adv=mini_batch.adv[:, mini_batch_envs_ids],
+                    done=mini_batch.done[:, mini_batch_envs_ids]
                 ), mini_batch_envs_ids)
-
 
     def update(self, initial_lstm_state: Tuple[torch.Tensor, torch.Tensor]):
 
@@ -461,18 +455,20 @@ class RecuurentPPO(MLPPPO):
         mean_val_loss = 0
         mean_aux_loss = 0
         num_updates = 0
+        mean_train_rew = 0
 
         for mini_batch, mini_batch_env_ids in self.sample_mini_batch(rollout_batch):
 
-            obs_batch = mini_batch.obs
-            act_batch = mini_batch.act
-            old_logp_batch = mini_batch.logp
-            old_mu_batch = mini_batch.mu
-            old_std_batch = mini_batch.std
-            old_val_batch = mini_batch.val
-            ret_batch = mini_batch.ret
-            adv_batch = mini_batch.adv
+            obs_batch = {"rays": mini_batch.rays, "proprio": mini_batch.proprio}
             done_batch = mini_batch.done
+
+            act_batch = mini_batch.act.reshape(-1, *mini_batch.act.shape[2:])
+            old_logp_batch = mini_batch.logp.reshape(-1)
+            old_mu_batch = mini_batch.mu.reshape(-1, *mini_batch.mu.shape[2:])
+            old_std_batch = mini_batch.std.reshape(-1, *mini_batch.std.shape[2:])
+            old_val_batch = mini_batch.val.reshape(-1)
+            ret_batch = mini_batch.ret.reshape(-1)
+            adv_batch = mini_batch.adv.reshape(-1)
 
             # Normalize advantage
             adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8) 
@@ -501,6 +497,7 @@ class RecuurentPPO(MLPPPO):
             mean_val_loss += value_loss.item()
             mean_entropy += entropy_batch.mean().item()
             mean_aux_loss += intr_loss.item()
+            mean_train_rew += ret_batch.mean().item()
             num_updates += 1
 
         mean_kl /= num_updates
@@ -508,13 +505,15 @@ class RecuurentPPO(MLPPPO):
         mean_val_loss /= num_updates
         mean_entropy /= num_updates
         mean_aux_loss /= num_updates
+        mean_train_rew /= num_updates
 
         return PPOUpdateStats(
             mean_kl=mean_kl,
             mean_surrogate_loss=mean_surrogate_loss,
             mean_value_loss=mean_val_loss,
             mean_entropy=mean_entropy,
-            mean_aux_loss=mean_aux_loss)
+            mean_aux_loss=mean_aux_loss,
+            mean_train_rew=mean_train_rew)
     
     def evaluate_policy(self, num_episodes=5):
         if self.eval_env is None:
@@ -533,19 +532,18 @@ class RecuurentPPO(MLPPPO):
         with torch.no_grad():
             for _ in range(num_episodes):
                 obs, _ = self.eval_env.reset()
-                done = torch.zeros(1, dtype=torch.bool, device=self.device)
+                done = torch.zeros((1,1), dtype=torch.bool, device=self.device)
                 episode_return = 0.0
                 episode_length = 0
 
-                while not done.item():
-                    obs_t = torch.as_tensor(obs, dtype=torch.float, device=self.device).unsqueeze(0)
-                    action, lstm_state = self.agent.predict_action(obs_t, lstm_state, done)
-                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action.squeeze(0).cpu().numpy())
+                while not done:
+                    action, lstm_state = self.agent.predict_action(obs, lstm_state, done)
+                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action)
 
                     obs = next_obs
                     episode_return += reward
                     episode_length += 1
-                    done = torch.tensor([terminated or truncated], dtype=torch.bool, device=self.device)
+                    done = torch.tensor([[bool(terminated[0]) or bool(truncated[0])]], dtype=torch.bool, device=self.device)
 
                 returns.append(float(episode_return))
                 lengths.append(int(episode_length))
@@ -553,11 +551,10 @@ class RecuurentPPO(MLPPPO):
         self.agent.train()
         return float(np.mean(returns)), float(np.mean(lengths))
 
-    def train(self, save_dir = None):
+    def train(self, run_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
-        obs = torch.as_tensor(obs, dtype=torch.float, device=self.device)
         done = torch.zeros(self.buffer.num_envs, dtype=torch.bool, device=self.device)
 
         initial_lstm_state = (
@@ -575,11 +572,10 @@ class RecuurentPPO(MLPPPO):
         for iter in iterations_bar:
 
             obs, rollout_lstm_state, done = self.collect_rollout(obs, rollout_lstm_state, done)
-            stats = self.update(initial_lstm_state)
+            stats = self.update(rollout_lstm_state)
             mean_eval_return, mean_eval_length = self.evaluate_policy()
             iteration = iter + 1
 
-            # TODO: Logging stats and evaluation on wandb
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
@@ -588,11 +584,27 @@ class RecuurentPPO(MLPPPO):
             f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
             f"mean_value_loss={stats.mean_value_loss:.4f} "
             f"mean_entropy={stats.mean_entropy:.4f} "
+            f"mean_train_rew={stats.mean_train_rew:.4f} "
             f"eval_return={mean_eval_return:.4f} "
-            f"eval_length={mean_eval_length:.2f}"
-        )
-            
-            if save_dir is not None:
+            f"eval_length={mean_eval_length:.2f} "
+            )
+
+            if wandb.run is not None:
+                wandb.log({
+                    "Custom PPO/Global Std": self.agent.actor.action_std.mean().item(),
+                    "Custom PPO/Mean KL-Divergence": stats.mean_kl,
+                    "Custom PPO/Mean Surrogate Loss": stats.mean_surrogate_loss,
+                    "Custom PPO/Mean Value Loss": stats.mean_value_loss,
+                    "Custom PPO/Mean Entropy": stats.mean_entropy,
+                    "Custom PPO/Mean Train Return": stats.mean_train_rew,
+                    "Custom PPO/Mean Eval Return": mean_eval_return,
+                    "Custom PPO/Mean Eval Length": mean_eval_length,
+                    "Custom PPO/Learning Rate": self.learning_rate,
+                    "Custom PPO/Clip Fraction": stats.clip_fraction,
+                    "Custom PPO/Explained Variance": stats.explained_variance,
+                })
+
+            if run_dir is not None:
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
-                    model_path = save_dir / f"iter_{iteration}.pt"
+                    model_path = run_dir / f"iter_{iteration}.pt"
                     self.agent.save_model(model_path, self.optimizer)
