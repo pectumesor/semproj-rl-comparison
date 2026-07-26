@@ -60,7 +60,7 @@ def main(cfg: DictConfig):
 
 
         algorithm = RecuurentPPO(num_layers=cfg.algorithm.num_layers, hidden_size=cfg.algorithm.hidden_size,
-                                 num_minibatches=cfg.algorithm.num_minibatches,
+                                 num_minibatches=cfg.algorithm.minibatch_size,
                                  buffer=buffer, device=device, env=env, eval_env=eval_env,
                                 agent=agent, cfg=cfg)
 
@@ -87,16 +87,23 @@ def main(cfg: DictConfig):
 
         # --- Custom PPO rollout + video ---
         render_env = NavigationEnvEasy(cfg, agent, num_rays, ray_dim, 1, device=device)
-        frames = render_env.record_rollout(agent, 200)
-        custom_video_path = run_dir / "videos" / "custom_ppo.mp4"
+        frames = render_env.record_recurrent_rollout(agent,
+                                                     cfg.algorithm.num_layers,
+                                                     1,
+                                                     cfg.algorithm.hidden_size, 200)
+        custom_video_path = run_dir / "videos" / "custom_lstm_ppo.mp4"
         save_video(frames, custom_video_path)
 
         # --- SB3 PPO rollout + video ---
-        sb3_env   = NavigationEnvSB3(cfg, num_rays, cfg.env.ray_dim, cfg.env.proprio_dim)
+        sb3_env   = NavigationEnvSB3(cfg= cfg, num_rays= num_rays, ray_dim= ray_dim, proprio_dim= cfg.env.proprio_dim,
+                                     device=device)
+        #sb3_agent = create_sb3_ppo_agent("LSTM", cfg, ray_dim, sb3_env)
         sb3_agent = PPO.load(run_dir / "sb3.pt", env=sb3_env)
 
-        frames_sb3 = sb3_env.record_rollout(sb3_agent, 200)
-        sb3_video_path = run_dir / "videos" / "sb3_ppo.mp4"
+        frames_sb3 = sb3_env.record_recurrent_rollout(sb3_agent,
+                                                      cfg.algorithm.num_layers,
+                                                      1, cfg.algorithm.hidden_size, 200, device=device)
+        sb3_video_path = run_dir / "videos" / "sb3_lstm_ppo.mp4"
         save_video(frames_sb3, sb3_video_path)
 
         wandb.log({

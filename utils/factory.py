@@ -140,7 +140,11 @@ def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env):
             clip_range=cfg.algorithm.clip_epsilon,
             ent_coef=cfg.algorithm.entropy_coeff,
             vf_coef=cfg.algorithm.val_coeff,
-            policy_kwargs=ppo_policy_kwargs,
+            policy_kwargs=dict(
+                **ppo_policy_kwargs,
+                lstm_hidden_size=cfg.algorithm.hidden_size,
+                n_lstm_layers=cfg.algorithm.num_layers,
+            ),
             verbose=1,
         )
 

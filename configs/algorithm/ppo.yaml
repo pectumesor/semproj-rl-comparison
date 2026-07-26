@@ -10,7 +10,7 @@ target_kl: null
 max_grad_norm: 0.5
 
 lr: 3e-4
-n_iterations: 10
+n_iterations: 100
 max_steps: 512
 num_steps: 256
 n_epochs: 2

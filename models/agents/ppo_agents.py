@@ -53,33 +53,6 @@ class PPOAgent(BaseAgent):
     def get_state_action_value(self, obs: dict, actions: torch.Tensor):
         raise ValueError("PPO Agent has no QNet or Double QNet to compute State-Action Values")
 
-
-    def save_model(self, path, optimizer: optim.Optimizer):
-
-        checkpoint = {
-            "obs_embed":self.obs_embed_model.state_dict(),
-            "backbone": self.backbone_model.state_dict(),
-            "actor": self.actor.state_dict(),
-            "critic": self.critic.state_dict(),
-            "optimizer": optimizer.state_dict()
-        }
-
-     
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        torch.save(checkpoint, path)
-
-    def load_model(self, path, device, optimizer: optim.Optimizer):
-
-        checkpoint = torch.load(path, map_location=device)
-
-        self.obs_embed_model.load_state_dict(checkpoint["obs_embed"])
-        self.backbone_model.load_state_dict(checkpoint["backbone"])
-        self.actor.load_state_dict(checkpoint["actor"])
-        self.critic.load_state_dict(checkpoint["critic"])
-        optimizer.load_state_dict(checkpoint["optimizer"])
-
-
-
 class RecurrentPPOAgent(RecurrentAgent):
 
     def __init__(self, obs_embed_model,

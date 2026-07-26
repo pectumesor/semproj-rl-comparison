@@ -306,6 +306,28 @@ class NavigationEnv(gym.Env):
             obs, _ = self.reset()
 
         return frames
+    
+    def record_recurrent_rollout(self, agent, num_layers, batch_size, hidden_size, steps):
+
+        frames = []
+        lstm_state = (
+            torch.zeros((num_layers, batch_size, hidden_size),
+                        dtype=torch.float, device=self.device),
+            torch.zeros((num_layers, batch_size, hidden_size),
+                         dtype=torch.float, device=self.device)
+            )
+        done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+        obs, _ = self.reset()
+        for _ in range(steps):
+            action, lstm_state = agent.predict_action(obs, lstm_state, done)
+            obs, _, done, _, _ = self.step(action)
+            frames.append(self.record_frame(obs))
+
+        if done.any():
+            obs, _ = self.reset()
+
+        return frames
+
 
 class NavigationEnvEasy(NavigationEnv):
     """

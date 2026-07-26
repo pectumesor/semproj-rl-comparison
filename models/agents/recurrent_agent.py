@@ -4,6 +4,8 @@ from envs.env_utils import *
 from typing import Optional, Tuple
 from ..heads import GuassianPolicyHead
 from ..backbones import SimpleLSTM
+import torch.optim as optim
+from pathlib import Path
 
 class RecurrentAgent(nn.Module):
     def __init__(self,
@@ -63,4 +65,27 @@ class RecurrentAgent(nn.Module):
         val = self.critic(h).squeeze(-1)
 
         return logp, mu, std, entropy, val
-    
+
+    def save_model(self, path, optimizer: optim.Optimizer):
+
+        checkpoint = {
+            "obs_embed":self.obs_embed_model.state_dict(),
+            "backbone": self.backbone_model.state_dict(),
+            "actor": self.actor.state_dict(),
+            "critic": self.critic.state_dict(),
+            "optimizer": optimizer.state_dict()
+        }
+
+     
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        torch.save(checkpoint, path)
+
+    def load_model(self, path, device, optimizer: optim.Optimizer):
+
+        checkpoint = torch.load(path, map_location=device)
+
+        self.obs_embed_model.load_state_dict(checkpoint["obs_embed"])
+        self.backbone_model.load_state_dict(checkpoint["backbone"])
+        self.actor.load_state_dict(checkpoint["actor"])
+        self.critic.load_state_dict(checkpoint["critic"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
