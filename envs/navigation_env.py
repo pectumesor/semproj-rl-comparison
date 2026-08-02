@@ -206,6 +206,7 @@ class NavigationEnv(gym.Env):
         goal_pos_exp = self.goal_pos[None, None, :].expand(self.num_envs, self.num_rays, 2)
         sample_pts = torch.where(goal_hit[:, :, None], goal_pos_exp, intersections)
         rgb = self.color_field(sample_pts[:, :, 0], sample_pts[:, :, 1])
+        rgb = torch.where(no_hit[:, :, None], torch.zeros_like(rgb), rgb)
         rays[:, 4:, :] = rgb.permute(0, 2, 1)
 
         # Proprioceptive: vestibular-style rates only (no absolute heading — humans don't have a compass)
@@ -381,6 +382,7 @@ class NavigationEnvEasy(NavigationEnv):
         goal_pos_exp = self.goal_pos[None, None, :].expand(self.num_envs, self.num_rays, 2)
         sample_pts = torch.where(goal_hit[:, :, None], goal_pos_exp, intersections)
         rgb = self.color_field(sample_pts[:, :, 0], sample_pts[:, :, 1])
+        rgb = torch.where(no_hit[:, :, None], torch.zeros_like(rgb), rgb)
         rays[:, 4:, :] = rgb.permute(0, 2, 1)
 
         # Proprioceptive:

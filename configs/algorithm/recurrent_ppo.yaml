@@ -5,6 +5,7 @@ defaults:
 name: recurrent_ppo
 num_layers: 2
 hidden_size: 64
+n_iterations: 20 # Make it faster to check for correctness
 
 # minibatch_size needs to be able to divide num_envs
 minibatch_size: 64

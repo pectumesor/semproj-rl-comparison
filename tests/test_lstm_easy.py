@@ -22,7 +22,8 @@ from algorithms import RolloutBuffer, MLPPPO, RecuurentPPO
 from utils import create_ppo_agent, create_sb3_ppo_agent, save_video
 
 #Env
-from envs import NavigationEnvEasy, compute_num_rays, NavigationEnvSB3, MyBackbone
+from envs import (NavigationEnvEasy, compute_num_rays, 
+                  NavigationEnvEasySB3, MyBackbone)
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from wandb.integration.sb3 import WandbCallback
@@ -64,7 +65,7 @@ def main(cfg: DictConfig):
                                  buffer=buffer, device=device, env=env, eval_env=eval_env,
                                 agent=agent, cfg=cfg)
 
-        vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg=cfg,
+        vec_env = make_vec_env(lambda: NavigationEnvEasySB3(cfg=cfg,
                                                          num_rays=num_rays,
                                                           ray_dim=ray_dim,
                                                            proprio_dim=4), n_envs=cfg.env.num_envs)
@@ -78,7 +79,11 @@ def main(cfg: DictConfig):
         algorithm.train(run_dir=run_dir)
         
         sb3_agent.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs,
-                         log_interval=1)
+                         log_interval=1, 
+                         callback=WandbCallback(
+                        gradient_save_freq=10,
+                        verbose=2)
+                        )
         
         sb3_agent.save(run_dir / f"sb3.pt")
 
@@ -95,7 +100,7 @@ def main(cfg: DictConfig):
         save_video(frames, custom_video_path)
 
         # --- SB3 PPO rollout + video ---
-        sb3_env   = NavigationEnvSB3(cfg= cfg, num_rays= num_rays, ray_dim= ray_dim, proprio_dim= cfg.env.proprio_dim,
+        sb3_env   = NavigationEnvEasySB3(cfg= cfg, num_rays= num_rays, ray_dim= ray_dim, proprio_dim= cfg.env.proprio_dim,
                                      device=device)
         #sb3_agent = create_sb3_ppo_agent("LSTM", cfg, ray_dim, sb3_env)
         sb3_agent = PPO.load(run_dir / "sb3.pt", env=sb3_env)

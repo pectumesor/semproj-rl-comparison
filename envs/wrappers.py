@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import pygame
 import imageio.v3 as iio
-from .navigation_env import NavigationEnvEasy
+from .navigation_env import NavigationEnvEasy, NavigationEnv
 from models.embeddings.simple import MLPObservationEmbeddings
 from models.backbones.mlp_backbone import MLPBackbone
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
@@ -14,14 +14,11 @@ from .env_utils import w2s
 class NavigationEnvSB3(gym.Env):
     """
     Single-env wrapper around NavigationEnv for Stable Baselines 3.
-
-    The dict observation {"rays": (C, R), "proprio": (4,)} is flattened into a
-    single numpy vector of shape (C*R + 4,) so SB3 sees a standard Box space.
     """
 
     def __init__(self, cfg, num_rays: int, ray_dim: tuple, proprio_dim: int, device: str = "cpu"):
         super().__init__()
-        self._env       = NavigationEnvEasy(cfg, None, num_rays, ray_dim, num_envs=1, device=device)
+        self._env       = NavigationEnv(cfg, None, num_rays, ray_dim, num_envs=1, device=device)
         self._ray_dim   = ray_dim
         self._proprio_dim = proprio_dim
         flat_dim = int(np.prod(ray_dim)) + proprio_dim
@@ -128,7 +125,6 @@ class NavigationEnvSB3(gym.Env):
         frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
         return frame
 
-
     def record_rollout(self, agent, steps):
         frames = []
         obs, _ = self.reset()
@@ -162,6 +158,13 @@ class NavigationEnvSB3(gym.Env):
             obs, _ = self.reset()
 
         return frames
+
+class NavigationEnvEasySB3(NavigationEnvSB3):
+    def __init__(self, cfg, num_rays, ray_dim, proprio_dim, device = "cpu"):
+        super().__init__(cfg, num_rays, ray_dim, proprio_dim, device)
+
+        self._env = NavigationEnvEasy(cfg, None, num_rays, ray_dim, num_envs=1, device=device)
+
 
 class MyBackbone(BaseFeaturesExtractor):
     """
