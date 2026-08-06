@@ -70,12 +70,12 @@ def main(cfg: DictConfig):
                                                           ray_dim=ray_dim,
                                                            proprio_dim=4), n_envs=cfg.env.num_envs)
 
-        sb3_agent = create_sb3_ppo_agent("LSTM", cfg, ray_dim, vec_env)
-
         log_dir = ROOT_DIR / "logs" / f"{cfg.algorithm.name}"
         run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
         run_dir = log_dir / run_name
-        
+
+        sb3_agent = create_sb3_ppo_agent("LSTM", cfg, ray_dim, vec_env, tensorboard_log=str(run_dir))
+
         algorithm.train(run_dir=run_dir)
         
         sb3_agent.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs,

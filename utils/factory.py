@@ -10,7 +10,7 @@ import torch.nn as nn
 import numpy as np
 
 
-def create_observation_model(type: str, ray_dim: int, cfg: DictConfig):
+def create_observation_model(type: str, ray_dim: tuple, cfg: DictConfig):
 
     if type == "MLP":
         return MLPObservationEmbeddings(
@@ -20,7 +20,7 @@ def create_observation_model(type: str, ray_dim: int, cfg: DictConfig):
             )
     elif type == "CNN":
 
-        return CNNObservationEmbeddings(ray_channels=ray_dim,
+        return CNNObservationEmbeddings(ray_channels=cfg.env.ray_encoding,
                                         cnn_out_channels=cfg.model.cnn_output_channels,
                                         proprio_dim=cfg.env.proprio_dim,
                                         proprio_hidden_sizes=cfg.model.obs_embed_hidden_sizes,
@@ -91,7 +91,7 @@ def create_sac_agent(observation_type: str, backbone_type: str, ray_dim:int, cfg
                     backbone_model=backbone_model,
                     actor=actor, critic=critic)
 
-def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env):
+def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env, tensorboard_log: str = None):
 
     features_extractor_kwargs = dict(
         features_extractor_class=MyBackbone,
@@ -125,6 +125,7 @@ def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env):
             ent_coef=cfg.algorithm.entropy_coeff,
             vf_coef=cfg.algorithm.val_coeff,
             policy_kwargs=ppo_policy_kwargs,
+            tensorboard_log=tensorboard_log,
             verbose=1,
         )
     else:
@@ -145,6 +146,7 @@ def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env):
                 lstm_hidden_size=cfg.algorithm.hidden_size,
                 n_lstm_layers=cfg.algorithm.num_layers,
             ),
+            tensorboard_log=tensorboard_log,
             verbose=1,
         )
 

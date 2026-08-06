@@ -120,7 +120,7 @@ class NavigationEnvSB3(gym.Env):
             color = rays[4:, i]
             pygame.draw.line(self._rec_screen,
                              (int(color[0]*255), int(color[1]*255), int(color[2]*255)),
-                             agent_screen, w2s(ray, scale, _SCREEN, _PADDING), 1)
+                             agent_screen, w2s(ray, scale, _SCREEN, _PADDING), 2)
 
         frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
         return frame
@@ -154,8 +154,8 @@ class NavigationEnvSB3(gym.Env):
             obs, _, done, _, _ = self.step(action)
             frames.append(self.record_frame(obs))
 
-        if done:
-            obs, _ = self.reset()
+            if done:
+                obs, _ = self.reset()
 
         return frames
 

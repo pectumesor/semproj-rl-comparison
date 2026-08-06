@@ -3,6 +3,6 @@ obs_embed_hidden_sizes: [64, 64]
 backbone_hidden_sizes: [64, 64]
 lstm_backbone_feature_dim: 64
 lstm_num_layers: 2
-cnn_output_channels: 1
+cnn_output_channels: 64
 policy_hidden_sizes: [64, 64]
 value_hidden_sizes: [64, 64]

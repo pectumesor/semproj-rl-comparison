@@ -50,7 +50,7 @@ def main(cfg: DictConfig):
         num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
         ray_dim = np.array([cfg.env.ray_encoding, num_rays])
 
-        agent = create_ppo_agent("MLP","LSTM", ray_dim, cfg).to(device)
+        agent = create_ppo_agent("CNN","LSTM", ray_dim, cfg).to(device)
 
         env   = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=ray_dim,
                                            num_envs=cfg.env.num_envs, device=device).compile()
@@ -64,28 +64,14 @@ def main(cfg: DictConfig):
                                  buffer=buffer, device=device, env=env, eval_env=eval_env,
                                 agent=agent, cfg=cfg)
 
-        vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg=cfg,
-                                                         num_rays=num_rays,
-                                                          ray_dim=ray_dim,
-                                                           proprio_dim=cfg.env.proprio_dim), n_envs=cfg.env.num_envs)
 
-        log_dir = ROOT_DIR / "logs" / f"{cfg.algorithm.name}"
+        log_dir = ROOT_DIR / "logs" / f"{cfg.algorithm.name}_cnn"
         run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
         run_dir = log_dir / run_name
 
-        sb3_agent = create_sb3_ppo_agent("LSTM", cfg, ray_dim, vec_env, tensorboard_log=str(run_dir))
 
         algorithm.train(run_dir=run_dir)
         
-        sb3_agent.learn(total_timesteps=cfg.algorithm.n_iterations * cfg.algorithm.num_steps * cfg.env.num_envs,
-                         log_interval=1, 
-                         callback=WandbCallback(
-                        gradient_save_freq=10,
-                        verbose=2)
-                        )
-        
-        sb3_agent.save(run_dir / f"sb3.pt")
-
         agent.load_model(run_dir / f"iter_{cfg.algorithm.n_iterations}.pt", device, algorithm.optimizer)
         agent.eval()
 
@@ -98,21 +84,8 @@ def main(cfg: DictConfig):
         custom_video_path = run_dir / "videos" / "custom_lstm_ppo.mp4"
         save_video(frames, custom_video_path)
 
-        # --- SB3 PPO rollout + video ---
-        sb3_env   = NavigationEnvSB3(cfg= cfg, num_rays= num_rays, ray_dim= ray_dim, proprio_dim= cfg.env.proprio_dim,
-                                     device=device)
-        #sb3_agent = create_sb3_ppo_agent("LSTM", cfg, ray_dim, sb3_env)
-        sb3_agent = PPO.load(run_dir / "sb3.pt", env=sb3_env)
-
-        frames_sb3 = sb3_env.record_recurrent_rollout(sb3_agent,
-                                                      cfg.algorithm.num_layers,
-                                                      1, cfg.algorithm.hidden_size, 200, device=device)
-        sb3_video_path = run_dir / "videos" / "sb3_lstm_ppo.mp4"
-        save_video(frames_sb3, sb3_video_path)
-
         wandb.log({
                     "Custom PPO/Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4"),
-                    "SB3/Rollout":        wandb.Video(str(sb3_video_path),   fps=10, format="mp4"),
                 })
 
 if __name__ == "__main__":
