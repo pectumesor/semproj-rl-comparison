@@ -373,7 +373,7 @@ class MLPPPO(PPO):
                     model_path = run_dir / f"iter_{iteration}.pt"
                     self.agent.save_model(model_path, self.optimizer)
 
-class RecuurentPPO(MLPPPO):
+class RecurrentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
         super().__init__(**kwargs)
 

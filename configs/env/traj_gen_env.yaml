@@ -1,0 +1,9 @@
+defaults:
+  - base_env
+  - _self_
+
+proprio_dim: 3
+fov: 330
+ray_encoding: 1
+max_speed: 5.0
+room_path: rooms/grid_cell_training.json

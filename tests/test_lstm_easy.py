@@ -18,7 +18,7 @@ from models import (MLPObservationEmbeddings,
                     ValueNet)
 # Agents
 from models import PPOAgent, RecurrentPPOAgent
-from algorithms import RolloutBuffer, MLPPPO, RecuurentPPO
+from algorithms import RolloutBuffer, MLPPPO, RecurrentPPO
 from utils import create_ppo_agent, create_sb3_ppo_agent, save_video
 
 #Env
@@ -60,7 +60,7 @@ def main(cfg: DictConfig):
         buffer = RolloutBuffer(ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim, device=device,cfg=cfg)
 
 
-        algorithm = RecuurentPPO(num_layers=cfg.algorithm.num_layers, hidden_size=cfg.algorithm.hidden_size,
+        algorithm = RecurrentPPO(num_layers=cfg.algorithm.num_layers, hidden_size=cfg.algorithm.hidden_size,
                                  num_minibatches=cfg.algorithm.minibatch_size,
                                  buffer=buffer, device=device, env=env, eval_env=eval_env,
                                 agent=agent, cfg=cfg)

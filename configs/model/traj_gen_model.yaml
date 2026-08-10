@@ -1,0 +1,10 @@
+defaults:
+  - base_model
+  - _self_
+
+
+place_cell_size: 256
+head_dir_cell_size: 12
+sigma_c: 0.01
+kappa: 20
+nr_iterations: 10

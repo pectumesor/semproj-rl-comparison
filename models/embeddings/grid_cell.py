@@ -11,12 +11,11 @@ Described on the paper: Vector-based navigation using grid-like representations 
 
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 class GridCellNetwork(nn.Module):
-    def __init__(self, dropout: float, inital_pos: torch.Tensor, initial_head_dir: torch.Tensor,
-                 place_cell_size: int, head_dir_cell_size: int,
-                batch_size: int, linear_sizes : list[int] = [512, 256, 2], hidden_size: int = 128):
+    def __init__(self, dropout: float, place_cell_size: int, head_dir_cell_size: int,
+                batch_size: int, linear_sizes : int = 512, hidden_size: int = 128):
         super().__init__()
     
 
@@ -24,9 +23,6 @@ class GridCellNetwork(nn.Module):
             torch.zeros((1, batch_size, hidden_size), dtype=torch.float),
             torch.zeros((1, batch_size, hidden_size), dtype=torch.float)
         )
-
-        self.l0 = inital_pos
-        self.m0 = initial_head_dir
 
         self.linear_l0_place = nn.Linear(place_cell_size, hidden_size, bias=False)
         self.linear_l0_head = nn.Linear(head_dir_cell_size, hidden_size, bias=False)
@@ -36,15 +32,11 @@ class GridCellNetwork(nn.Module):
 
         self.lstm = nn.LSTM(input_size=3, hidden_size=hidden_size, num_layers=1) # Receives [v, sin(phi_t), cos(phi_t)]
 
-        current_size = hidden_size
-        layers = []
-        for size in linear_sizes:
-            layers += [
-                nn.Linear(current_size, size),
-                nn.Dropout(p=dropout)
-            ]
-        
-        self.linear_decoder = nn.Sequential(*layers)
+        self.linear_map = nn.Sequential(nn.Linear(hidden_size, linear_sizes),
+                                        nn.Dropout(p=dropout))
+
+        self.place_cell_head = nn.Linear(linear_sizes, place_cell_size)
+        self.head_dir_head = nn.Linear(linear_sizes, head_dir_cell_size)
 
     def initialize_lstm(self, init_place_cell: torch.Tensor, init_head_cell: torch.Tensor):
 
@@ -55,6 +47,12 @@ class GridCellNetwork(nn.Module):
 
     def forward(self, x):
 
-        hidden_state, cell_state = self.lstm(x)
+        hidden_state, _ = self.lstm(x, self.initial_lstm_state)
 
-        
+        linear_activation = self.linear_map(hidden_state)
+
+        place_cell_pred = self.place_cell_head(linear_activation)
+
+        head_dir_pred = self.head_dir_head(linear_activation)
+
+        return place_cell_pred, head_dir_pred

@@ -1,0 +1,49 @@
+"""
+Compare my own PPO implementation with Stable Baselines
+
+"""
+import sys
+from datetime import datetime
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
+
+import hydra
+from omegaconf import DictConfig, OmegaConf
+import wandb
+
+from models import TrajGenAgent
+
+#Env
+from envs import TrajGenEnv
+from wandb.integration.sb3 import WandbCallback
+
+
+import torch
+import torch.nn as nn
+import numpy as np
+
+device = torch.device( "mps" if torch.backends.mps.is_available() 
+                      else "cuda" if torch.cuda.is_available()
+                      else "cpu" )
+#device = torch.device("cpu")
+print(f"Using device: {device}")
+
+
+@hydra.main( config_path="../configs", config_name="test_recurrent", version_base=None)
+def main(cfg: DictConfig):
+
+    #wandb.login()
+
+    #with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=OmegaConf.to_container(cfg, resolve=True),
+    #                 sync_tensorboard=True):
+        
+        T = 100
+
+        agent = TrajGenAgent(traj_len=T, cfg=cfg, device=device)
+
+        agent.train()
+
+if __name__ == "__main__":
+    main()

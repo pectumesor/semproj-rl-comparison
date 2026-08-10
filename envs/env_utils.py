@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import json
+import math
 
 
 def _cross2d(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -93,8 +94,6 @@ class RayCast:
         intersections = positions[:, None, :] + min_t_safe[:, :, None] * d      # (E, R, 2)
 
         return intersections, distances, d_unit
-
-
 
 class PerlinColor:
     """
@@ -212,3 +211,13 @@ def w2s(pos, scale, screen_size, padding):
             """World (x, y) → pygame pixel (px, py) with Y-flip and padding."""
             return (int(float(pos[0]) * scale) + padding,
                     int(screen_size - padding - float(pos[1]) * scale))
+
+def bounding_box(wall_ends, wall_starts):
+
+    min_x = np.min(np.min(wall_ends, axis=0), np.min(wall_starts, axis=0))
+    max_x = np.max(np.max(wall_ends, axis=0), np.max(wall_starts, axis=0))
+
+    min_y = np.min(np.min(wall_ends, axis=1), np.min(wall_starts, axis=1))
+    max_y = np.max(np.max(wall_ends, axis=1), np.max(wall_starts, axis=1))
+
+    return min_x, max_x, min_y, max_y
