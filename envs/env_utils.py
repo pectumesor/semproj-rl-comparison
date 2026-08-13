@@ -214,10 +214,8 @@ def w2s(pos, scale, screen_size, padding):
 
 def bounding_box(wall_ends, wall_starts):
 
-    min_x = np.min(np.min(wall_ends, axis=0), np.min(wall_starts, axis=0))
-    max_x = np.max(np.max(wall_ends, axis=0), np.max(wall_starts, axis=0))
-
-    min_y = np.min(np.min(wall_ends, axis=1), np.min(wall_starts, axis=1))
-    max_y = np.max(np.max(wall_ends, axis=1), np.max(wall_starts, axis=1))
+    points = np.concatenate([wall_ends, wall_starts], axis=0)
+    min_x, min_y = np.min(points, axis=0)
+    max_x, max_y = np.max(points, axis=0)
 
     return min_x, max_x, min_y, max_y

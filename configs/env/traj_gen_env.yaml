@@ -5,5 +5,7 @@ defaults:
 proprio_dim: 3
 fov: 330
 ray_encoding: 1
-max_speed: 5.0
+max_speed: 13  # ~5x RAYLEIGH_B, generous safety cap that barely clips the Rayleigh tail
 room_path: rooms/grid_cell_training.json
+dropout: 0.5
+num_envs: 32

@@ -2,14 +2,17 @@ import math
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
-from models import GridCellNetwork
+from models.embeddings.grid_cell import GridCellNetwork
 from envs import TrajGenEnv
+from tqdm import tqdm
 
-WALL_TRESHOLD = 2
 
-RAYLEIGH_B = 13
+
+WALL_TRESHOLD = 30    # 0.03m (Banino Table 1 d) * 1000 units/m
+RAYLEIGH_B = 2.6      # 0.13 m/s (Banino Table 1 sigma^(v)) * 1000 units/m * 0.02 s/step
 NORMAL_MU = 0
-NORMAL_SIGMA = 330
+NORMAL_SIGMA = 6.6    # 330 deg/s (Banino Table 1 sigma^(phi)) * 0.02 s/step
+RHO_RH = 0.25         # Banino Table 1: velocity reduction factor near the wall
 
 
 def rayleigh_sample(b: float, n: int, device=None) -> torch.Tensor:
@@ -19,7 +22,7 @@ def rayleigh_sample(b: float, n: int, device=None) -> torch.Tensor:
 
 
 class TrajGenAgent(nn.Module):
-    def __init__(self, traj_len: int, cfg: DictConfig, device):
+    def __init__(self, traj_len: int, num_rays: int, obs_dim, cfg: DictConfig, device):
         super().__init__()
 
         self.N = cfg.model.place_cell_size
@@ -33,23 +36,33 @@ class TrajGenAgent(nn.Module):
                                                  head_dir_cell_size=self.M,
                                                  batch_size=cfg.env.num_envs).to(device)
         
-        self.env = TrajGenEnv(cfg=cfg, num_envs=cfg.env.num_rays, obs_dim=cfg.env.obs_dim,
-                              num_rays=cfg.env.num_envs, device=device)
+        self.env = TrajGenEnv(cfg=cfg, num_envs=cfg.env.num_envs, obs_dim=obs_dim,
+                              num_rays=num_rays, device=device)
         
         self.traj_len = traj_len
-        self.nr_iterations = cfg.model.iterations
+        self.nr_iterations = cfg.model.nr_iterations
+        self.block_size = cfg.model.block_size
         self.device = device
 
-        self.optimizer = torch.optim.AdamW(self.grid_cell_network.parameters(), lr=cfg.model.lr)
+        self.decay, self.no_decay = self.grid_cell_network.select_decay_clip_parameters(
+            ["place_cell_head.weight", "place_cell_head.bias",
+              "head_dir_head.weight", "head_dir_head.bias"])
+        
+        self.grad_clip = cfg.model.clip_tresh
+
+        self.optimizer = torch.optim.RMSprop( [
+            {"params": self.decay, "weight_decay": cfg.model.decay},
+            {"params": self.no_decay, "weight_decay": 0.0},], lr=cfg.model.lr,
+              momentum=cfg.model.momentum)
 
     def initialize(self):
 
         min_x, max_x, min_y, max_y = self.env.bounding_box
-        x = torch.empty((self.N,)).uniform_(min_x + WALL_TRESHOLD, max_x - WALL_TRESHOLD)
-        y = torch.empty((self.N,)).uniform_(min_y + WALL_TRESHOLD, max_y - WALL_TRESHOLD)
+        x = torch.empty((self.N,), device=self.device).uniform_(min_x + WALL_TRESHOLD, max_x - WALL_TRESHOLD)
+        y = torch.empty((self.N,), device=self.device).uniform_(min_y + WALL_TRESHOLD, max_y - WALL_TRESHOLD)
 
         self.MU_C = torch.stack([x,y], dim=-1) # Place cell centers
-        self.MU_H = torch.empty((self.M,)).uniform_(- torch.pi, torch.pi) # Head dir cell centers
+        self.MU_H = torch.empty((self.M,), device=self.device).uniform_(- torch.pi, torch.pi) # Head dir cell centers
 
     
     def get_action(self, distances: torch.Tensor) -> torch.Tensor:
@@ -80,7 +93,7 @@ class TrajGenAgent(nn.Module):
         close = (d_wall < WALL_TRESHOLD) & (a_wall.abs() < torch.pi / 2.0)    # (E,) bool
 
         angle_close = torch.sign(a_wall) * (torch.pi / 2.0 - a_wall.abs()) + random_turn
-        speed_close = random_speed - 0.5 * (random_speed - 5.0)
+        speed_close = random_speed * (1.0 - RHO_RH)
 
         angle = torch.where(close, angle_close, random_turn)
         speed = torch.where(close, speed_close, random_speed)
@@ -98,7 +111,7 @@ class TrajGenAgent(nn.Module):
         # MU_C shape: (N,2), MU_H Shape: (M,)
 
         squared_dists = torch.sum((pos[:, None, :] - self.MU_C[None, :, :]) ** 2, dim=-1) # Second Norm
-        place_cell = torch.softmax(-squared_dists / (2 * self.sigma_c)**2, dim=-1)
+        place_cell = torch.softmax(-squared_dists / (2 * self.sigma_c**2), dim=-1)
 
         squared_thetas = (head_dir[:, None] - self.MU_H)
         head_cell = torch.softmax(self.kappa * torch.cos(squared_thetas), dim=-1)
@@ -109,9 +122,9 @@ class TrajGenAgent(nn.Module):
 
         trajectory = []
 
-        obs = self.env.reset()
+        obs, _ = self.env.reset()
 
-        distances = obs["rays"]
+        distances = obs["rays"].squeeze(1)
 
         place_cell, head_dir_cell = self.place_and_head_cell_generation(
             pos= obs["proprio"][:, :2], head_dir=obs["proprio"][:, 2]
@@ -122,9 +135,11 @@ class TrajGenAgent(nn.Module):
                 "place_cell": place_cell,
                 "head_dir_cell":head_dir_cell,
                 "linear_speed": torch.zeros(self.env.num_envs, dtype=torch.float32, device=self.device),
-                "angular_peed": torch.zeros(self.env.num_envs, dtype=torch.float32, device=self.device)
+                "angular_speed": torch.zeros(self.env.num_envs, dtype=torch.float32, device=self.device)
             }
         )
+
+    
 
         for _ in range(self.traj_len):
 
@@ -141,7 +156,7 @@ class TrajGenAgent(nn.Module):
                 "angular_speed": speeds["last_turning"]
             })
 
-            distances = obs["rays"]
+            distances = obs["rays"].squeeze(1)
 
         return trajectory
 
@@ -150,46 +165,53 @@ class TrajGenAgent(nn.Module):
         self.initialize()
         loss_fn = nn.CrossEntropyLoss()
         self.grid_cell_network.train()
+        self.env.compile()
 
-        total_loss = 0
-        total_size = 0
+        pbar = tqdm(range(self.nr_iterations), desc="Training Grid Cell Network")
+        num_blocks = self.traj_len // self.block_size
 
-        for i in range(self.nr_iterations):
+        for i in pbar:
 
-            T = self.generate_trajectories()
+            T = self.generate_trajectories()  # traj_len + 1 entries; T[0] is the true reset state
 
-            data = T.pop(0)
-            c0, h0 = data["place_cell"], data["head_dir_cell"]
-            self.grid_cell_network.initial_lstm_state(c0, h0)
+            block_loss_sum = 0.0
 
-            for data in T:
+            for b in range(num_blocks):
+                start = b * self.block_size
 
-                place_cell_label = data["place_cell"]
-                head_dir_label = data["head_dir_cell"]
-                linear_speed = data["linear_speed"]
-                angular_speed = data["angular_speed"]
+                anchor = T[start]
+                c0, h0 = anchor["place_cell"], anchor["head_dir_cell"]
+                h = self.grid_cell_network.initialize_lstm(c0, h0)
 
-                total_size += place_cell_label.shape(0)
+                block = T[start + 1 : start + 1 + self.block_size]
 
-                x = torch.cat([linear_speed, torch.sin(angular_speed),
-                               torch.cos(angular_speed)], dim=-1).to(self.device)       
+                linear_speed      = torch.stack([d["linear_speed"]  for d in block], dim=0)  # (B, E)
+                angular_speed     = torch.stack([d["angular_speed"] for d in block], dim=0)  # (B, E)
+                place_cell_label  = torch.stack([d["place_cell"]    for d in block], dim=0)  # (B, E, N)
+                head_dir_label    = torch.stack([d["head_dir_cell"] for d in block], dim=0)  # (B, E, M)
 
-                place_cell_pred, head_dir_pred = self.grid_cell_network(x)
+                x = torch.stack([linear_speed, torch.sin(angular_speed),
+                                  torch.cos(angular_speed)], dim=-1).to(self.device)          # (B, E, 3)
 
-                loss = loss_fn(place_cell_pred,
-                                place_cell_label) + loss_fn(head_dir_pred, head_dir_label)
+                place_cell_pred, head_dir_pred, _ = self.grid_cell_network(x, h)
 
-                total_loss += loss.item()
+                loss = loss_fn(place_cell_pred.reshape(-1, place_cell_pred.shape[-1]),
+                                place_cell_label.reshape(-1, place_cell_label.shape[-1])) \
+                     + loss_fn(head_dir_pred.reshape(-1, head_dir_pred.shape[-1]),
+                                head_dir_label.reshape(-1, head_dir_label.shape[-1]))
 
-                # Backpropragation
-                loss.backward()
+                # One gradient step per block. LSTM state is discarded across blocks —
+                # each block re-anchors on the true position instead of carrying state over.
                 self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_value_(self.decay, clip_value=self.grad_clip)
                 self.optimizer.step()
 
-            
-            total_loss /= total_size
+                block_loss_sum += loss.item()
 
-            print(f"Loss at iteration {i + 1}: {total_loss:4f}")
+            pbar.set_description(f"Loss at iteration {i+1}: {block_loss_sum / num_blocks:.4f}")
+
+            #print(f"Loss at iteration {i + 1}: {loss.item():4f}")
 
 
 

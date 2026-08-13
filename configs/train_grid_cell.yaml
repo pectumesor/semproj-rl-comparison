@@ -1,0 +1,18 @@
+defaults:
+  - algorithm: ppo
+  - env: traj_gen_env
+  - model: traj_gen_model
+  - _self_
+
+wandb:
+  project: semproj
+  entity: eazevedo-eth-z-rich
+  group: test        
+  tags: [ppo]
+  mode: online       # online | offline | disabled
+
+seed: 42
+
+
+
+

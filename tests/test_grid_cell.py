@@ -16,7 +16,8 @@ import wandb
 from models import TrajGenAgent
 
 #Env
-from envs import TrajGenEnv
+from envs import compute_num_rays
+
 from wandb.integration.sb3 import WandbCallback
 
 
@@ -31,7 +32,7 @@ device = torch.device( "mps" if torch.backends.mps.is_available()
 print(f"Using device: {device}")
 
 
-@hydra.main( config_path="../configs", config_name="test_recurrent", version_base=None)
+@hydra.main( config_path="../configs", config_name="train_grid_cell", version_base=None)
 def main(cfg: DictConfig):
 
     #wandb.login()
@@ -39,9 +40,12 @@ def main(cfg: DictConfig):
     #with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=OmegaConf.to_container(cfg, resolve=True),
     #                 sync_tensorboard=True):
         
-        T = 100
+        T = 1000
 
-        agent = TrajGenAgent(traj_len=T, cfg=cfg, device=device)
+        num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
+        ray_dim = np.array([cfg.env.ray_encoding, num_rays])
+
+        agent = TrajGenAgent(traj_len=T, cfg=cfg, num_rays=num_rays, obs_dim=tuple(ray_dim), device=device)
 
         agent.train()
 

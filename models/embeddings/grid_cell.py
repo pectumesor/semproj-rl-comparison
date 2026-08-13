@@ -42,17 +42,29 @@ class GridCellNetwork(nn.Module):
 
         l0 = self.linear_l0_place(init_place_cell) + self.linear_l0_head(init_head_cell)
         m0 = self.linear_m0_place(init_place_cell) + self.linear_m0_head(init_head_cell)
-        self.initial_lstm_state = (l0, m0)
+        return (l0.unsqueeze(0), m0.unsqueeze(0))
+    
+    def select_decay_clip_parameters(self, parameter):
+
+        decay, no_decay = [], []
+
+        for n, p in self.named_parameters():
+            if n in parameter:
+                decay.append(p)
+            else:
+                no_decay.append(p)
+
+        return decay, no_decay
 
 
-    def forward(self, x):
+    def forward(self, x, h):
 
-        hidden_state, _ = self.lstm(x, self.initial_lstm_state)
+        lstm_out, h_n = self.lstm(x, h)  # lstm_out: (T, E, hidden_size)
 
-        linear_activation = self.linear_map(hidden_state)
+        linear_activation = self.linear_map(lstm_out)
 
-        place_cell_pred = self.place_cell_head(linear_activation)
+        place_cell_pred = self.place_cell_head(linear_activation)  # (T, E, N)
 
-        head_dir_pred = self.head_dir_head(linear_activation)
+        head_dir_pred = self.head_dir_head(linear_activation)      # (T, E, M)
 
-        return place_cell_pred, head_dir_pred
+        return place_cell_pred, head_dir_pred, h_n

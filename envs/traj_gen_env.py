@@ -99,12 +99,12 @@ class TrajGenEnv(gym.Env):
         """
         
         eps = 1.0
-        x = torch.empty((self.num_envs,)).uniform_(self.bounding_box[0] + eps, self.bounding_box[1] - eps)
-        y = torch.empty((self.num_envs,)).uniform_(self.bounding_box[2] + eps, self.bounding_box[3] - eps)
+        x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + eps, self.bounding_box[1] - eps)
+        y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + eps, self.bounding_box[3] - eps)
         rand_pos = torch.stack([x,y], dim=-1)
 
         self.agent_pos        = rand_pos
-        self.facing_direction = torch.empty((self.num_envs, )).uniform_(0,2 * torch.pi)
+        self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
         _, distances, _ = self.ray_cast.scan(self.agent_pos, self.facing_direction)
         return self.get_observations(distances), {}
 
@@ -146,9 +146,9 @@ class TrajGenEnv(gym.Env):
        
         rays[:, 0, :] = torch.where(no_hit, torch.ones_like(distances), distances / max_range)
 
-        proprio = torch.stack([
+        proprio = torch.cat([
             self.agent_pos,
-            self.facing_direction,
+            self.facing_direction[:, None],
         ], dim=-1)  # (E, 3)
 
         return {"rays": rays, "proprio": proprio}
