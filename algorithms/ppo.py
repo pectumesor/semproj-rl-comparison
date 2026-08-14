@@ -576,7 +576,7 @@ class RecurrentPPO(MLPPPO):
             mean_eval_return, mean_eval_length = self.evaluate_policy()
             iteration = iter + 1
 
-            print(
+            print( 
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
             f"global_std={self.agent.actor.action_std.mean().item():.4f} "

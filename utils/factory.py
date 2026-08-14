@@ -187,10 +187,10 @@ def create_sb3_sac_agent(cfg: DictConfig, ray_dim: int, env):
         
 def create_algorithm(cfg: DictConfig, type: str, buffer, device, env, eval_env, agent):
 
-    if type == "ppo":
+    if type == "mlp":
         return MLPPPO(buffer, device, env, eval_env, agent, cfg)
     else:
-        return RecurrentPPO(num_layers=cfg.algorithm.num_layers, hidden_size=cfg.algorithm.hidden_size,
+        return RecurrentPPO(num_layers=cfg.backbone.lstm_num_layers, hidden_size=cfg.backbone.lstm_backbone_feature_dim,
                                      num_minibatches=cfg.algorithm.minibatch_size,
                                      buffer=buffer, device=device, env=env, eval_env=eval_env,
                                     agent=agent, cfg=cfg)

@@ -16,3 +16,9 @@ num_steps: 256
 n_epochs: 2
 save_interval: 10
 mini_batch_size: 128
+
+ # Recurrent PPO
+num_layers: 2
+
+# minibatch_size needs to be able to divide num_envs
+minibatch_size: 64

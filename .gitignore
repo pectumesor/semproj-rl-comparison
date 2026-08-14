@@ -6,6 +6,7 @@
 #Hydra outputs
 outputs/
 logs/
+multirun/
 
 
 # Wandb log files
@@ -13,3 +14,4 @@ wandb/
 
 # Miscallaneous
 videos/
+

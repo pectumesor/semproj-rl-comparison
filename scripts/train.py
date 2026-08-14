@@ -52,7 +52,7 @@ def main(cfg: DictConfig):
         buffer = create_buffer(type=cfg.algorithm.name, ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim,
                                device=device, cfg=cfg)
 
-        algorithm = create_algorithm(cfg=cfg, type=cfg.algorithm.name, buffer=buffer, device=device,
+        algorithm = create_algorithm(cfg=cfg, type=cfg.backbone.name, buffer=buffer, device=device,
                                      env=env, eval_env=eval_env, agent=agent)
 
         trial_name = f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}"

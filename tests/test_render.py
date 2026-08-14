@@ -10,6 +10,7 @@ sys.path.append(str(ROOT_DIR))
 import hydra
 from omegaconf import DictConfig
 import torch
+import numpy as np
 
 from algorithms import RolloutBuffer, MLPPPO
 from envs import NavigationEnvEasy, compute_num_rays, NavigationEnvSB3
@@ -20,10 +21,11 @@ device = torch.device("cpu")
 print(f"Using device: {device}")
 
 
-@hydra.main(config_path="../configs", config_name="test_algorithm", version_base=None)
+@hydra.main(config_path="../configs", config_name="base", version_base=None)
 def main(cfg: DictConfig):
 
     num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
+    ray_dim = np.array([cfg.env.ray_encoding, num_rays])
     
     agent = create_ppo_agent("MLP", "MLP", cfg).to(device)
 

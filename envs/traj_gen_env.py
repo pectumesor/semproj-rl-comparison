@@ -54,7 +54,7 @@ class TrajGenEnv(gym.Env):
         if cfg.env.range_type == "diagonal":
             max_range = diagonal_length(*self.bounding_box)
         elif cfg.env.range_type == "horizontal":
-            max_range = self.bounding_box[1] - self.bounding_box[0]
+            max_range = float(self.bounding_box[1] - self.bounding_box[0])
         else:
             max_range = torch.inf
 

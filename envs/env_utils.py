@@ -227,4 +227,4 @@ def diagonal_length(min_x, max_x, min_y, max_y):
 
     diagonal_vector = right_point - left_point
 
-    return torch.linalg.norm(diagonal_vector)
+    return torch.linalg.norm(diagonal_vector).item()

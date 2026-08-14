@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 python scripts/train.py --multirun \
-    env.room_path="rooms/one_room.json" \
+    env.room_path="rooms/two_room.json" \
     env.goal_radius=16 \
     env.goal_pos.x=40 \
     env.goal_pos.y=40 \

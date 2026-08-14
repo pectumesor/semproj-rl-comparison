@@ -68,7 +68,7 @@ class NavigationEnv(gym.Env):
         if cfg.env.range_type == "diagonal":
             max_range = diagonal_length(*self.bounding_box)
         elif cfg.env.range_type == "horizontal":
-            max_range = self.bounding_box[1] - self.bounding_box[0]
+            max_range = float(self.bounding_box[1] - self.bounding_box[0])
         else:
             max_range = torch.inf
 
@@ -331,8 +331,8 @@ class NavigationEnv(gym.Env):
             obs, _, done, _, _ = self.step(action)
             frames.append(self.record_frame(obs))
 
-        if done.any():
-            obs, _ = self.reset()
+            if done.any():
+                obs, _ = self.reset()
 
         return frames
     
