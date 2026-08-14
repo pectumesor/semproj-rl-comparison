@@ -1,0 +1,66 @@
+algorithm:
+  name: ppo
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coeff: 0.0
+  val_coeff: 0.5
+  aux_coeff: 0.2
+  task_coeff: 1.0
+  intr_coeff: 0.0
+  target_kl: null
+  max_grad_norm: 0.5
+  lr: 0.0003
+  n_iterations: 100
+  max_steps: 512
+  num_steps: 256
+  n_epochs: 2
+  save_interval: 10
+  mini_batch_size: 128
+env:
+  name: NavEnv
+  room_path: rooms/one_room.json
+  num_classes: 3
+  act_dim: 2
+  action_low: -1
+  action_high: 1
+  max_speed: 13.0
+  range_type: diagonal
+  ray_density: 0.2
+  fov: 180
+  ray_encoding: 7
+  proprio_dim: 2
+  init_pos:
+    x: 50.0
+    'y': 50.0
+  goal_pos:
+    x: 10.0
+    'y': 10.0
+  num_envs: 256
+  gamma: 0.99
+  goal_radius: 4.0
+observation:
+  name: mlp
+  obs_embed_hidden_sizes:
+  - 64
+  - 64
+backbone:
+  name: mlp
+  backbone_hidden_sizes:
+  - 64
+  - 64
+head:
+  name: base-head
+  policy_hidden_sizes:
+  - 64
+  - 64
+  value_hidden_sizes:
+  - 64
+  - 64
+wandb:
+  project: semproj
+  entity: eazevedo-eth-z-rich
+  group: test
+  tags:
+  - ppo
+  mode: online
+seed: 42

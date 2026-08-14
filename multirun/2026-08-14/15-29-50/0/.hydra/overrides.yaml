@@ -1,0 +1,4 @@
+- env.room_path=rooms/one_room.json
+- observation=mlp_observation
+- backbone=mlp_backbone
+- env.range_type=diagonal

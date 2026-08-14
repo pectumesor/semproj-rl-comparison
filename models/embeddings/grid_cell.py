@@ -15,15 +15,9 @@ import torch.nn.functional as F
 
 class GridCellNetwork(nn.Module):
     def __init__(self, dropout: float, place_cell_size: int, head_dir_cell_size: int,
-                batch_size: int, linear_sizes : int = 512, hidden_size: int = 128):
+                  linear_sizes : int = 512, hidden_size: int = 128):
         super().__init__()
     
-
-        self.initial_lstm_state = (
-            torch.zeros((1, batch_size, hidden_size), dtype=torch.float),
-            torch.zeros((1, batch_size, hidden_size), dtype=torch.float)
-        )
-
         self.linear_l0_place = nn.Linear(place_cell_size, hidden_size, bias=False)
         self.linear_l0_head = nn.Linear(head_dir_cell_size, hidden_size, bias=False)
 

@@ -5,14 +5,19 @@ from omegaconf import DictConfig, OmegaConf
 from models.embeddings.grid_cell import GridCellNetwork
 from envs import TrajGenEnv
 from tqdm import tqdm
+from pathlib import Path
 
+import sys
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
 
 WALL_TRESHOLD = 30    # 0.03m (Banino Table 1 d) * 1000 units/m
 RAYLEIGH_B = 2.6      # 0.13 m/s (Banino Table 1 sigma^(v)) * 1000 units/m * 0.02 s/step
 NORMAL_MU = 0
 NORMAL_SIGMA = 6.6    # 330 deg/s (Banino Table 1 sigma^(phi)) * 0.02 s/step
 RHO_RH = 0.25         # Banino Table 1: velocity reduction factor near the wall
+
 
 
 def rayleigh_sample(b: float, n: int, device=None) -> torch.Tensor:
@@ -25,11 +30,11 @@ class TrajGenAgent(nn.Module):
     def __init__(self, traj_len: int, num_rays: int, obs_dim, cfg: DictConfig, device):
         super().__init__()
 
-        self.N = cfg.model.place_cell_size
-        self.M = cfg.model.head_dir_cell_size
+        self.N = cfg.place_cell_size
+        self.M = cfg.head_dir_cell_size
 
-        self.sigma_c = cfg.model.sigma_c # Place cell standard deviation parameter
-        self.kappa = cfg.model.kappa # Head direction concentration parameter
+        self.sigma_c = cfg.sigma_c # Place cell standard deviation parameter
+        self.kappa = cfg.kappa # Head direction concentration parameter
 
         self.grid_cell_network = GridCellNetwork(dropout= cfg.env.dropout,
                                                  place_cell_size=self.N,
@@ -40,20 +45,20 @@ class TrajGenAgent(nn.Module):
                               num_rays=num_rays, device=device)
         
         self.traj_len = traj_len
-        self.nr_iterations = cfg.model.nr_iterations
-        self.block_size = cfg.model.block_size
+        self.nr_iterations = cfg.nr_iterations
+        self.block_size = cfg.block_size
         self.device = device
 
         self.decay, self.no_decay = self.grid_cell_network.select_decay_clip_parameters(
             ["place_cell_head.weight", "place_cell_head.bias",
               "head_dir_head.weight", "head_dir_head.bias"])
         
-        self.grad_clip = cfg.model.clip_tresh
+        self.grad_clip = cfg.clip_tresh
 
         self.optimizer = torch.optim.RMSprop( [
-            {"params": self.decay, "weight_decay": cfg.model.decay},
-            {"params": self.no_decay, "weight_decay": 0.0},], lr=cfg.model.lr,
-              momentum=cfg.model.momentum)
+            {"params": self.decay, "weight_decay": cfg.decay},
+            {"params": self.no_decay, "weight_decay": 0.0},], lr=cfg.lr,
+              momentum=cfg.momentum)
 
     def initialize(self):
 
@@ -169,12 +174,13 @@ class TrajGenAgent(nn.Module):
 
         pbar = tqdm(range(self.nr_iterations), desc="Training Grid Cell Network")
         num_blocks = self.traj_len // self.block_size
+        best_loss = float("inf")
 
         for i in pbar:
 
             T = self.generate_trajectories()  # traj_len + 1 entries; T[0] is the true reset state
 
-            block_loss_sum = 0.0
+            block_loss_sum = torch.zeros((), device=self.device)
 
             for b in range(num_blocks):
                 start = b * self.block_size
@@ -207,13 +213,37 @@ class TrajGenAgent(nn.Module):
                 torch.nn.utils.clip_grad_value_(self.decay, clip_value=self.grad_clip)
                 self.optimizer.step()
 
-                block_loss_sum += loss.item()
+                block_loss_sum += loss.detach()
 
-            pbar.set_description(f"Loss at iteration {i+1}: {block_loss_sum / num_blocks:.4f}")
+            curr_loss = (block_loss_sum / num_blocks).item()
+            pbar.set_description(f"Loss at iteration {i+1}: {curr_loss:.4f}")
+
+            if (i+1) % 1000 == 0 and curr_loss < best_loss:
+                best_loss = curr_loss
+                path = ROOT_DIR / "logs" / "grid_cell_test" / f"loss_{best_loss:.4f}"
+                self.save_model(path)
+
+
 
             #print(f"Loss at iteration {i + 1}: {loss.item():4f}")
 
-
+    def save_model(self, path):
+    
+            checkpoint = {
+                "grid_network":self.grid_cell_network.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+            }
+         
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            torch.save(checkpoint, path)
+    
+    def load_model(self, path, device):
+    
+        checkpoint = torch.load(path, map_location=device)
+    
+        self.grid_cell_network.load_state_dict(checkpoint["grid_network"])
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
+    
 
 
 

@@ -1,0 +1,3 @@
+name: base-head
+policy_hidden_sizes: [64, 64]
+value_hidden_sizes: [64, 64]

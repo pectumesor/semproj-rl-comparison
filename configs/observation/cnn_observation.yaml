@@ -1,0 +1,3 @@
+name: cnn
+obs_embed_hidden_sizes: [64, 64]
+cnn_output_channels: 64

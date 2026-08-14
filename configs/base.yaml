@@ -1,8 +1,8 @@
 defaults:
-  - algorithm: recurrent_ppo
-  - env: easy_env
+  - algorithm: ppo
+  - env: base_env
   - observation: mlp_observation
-  - backbone: lstm_backbone
+  - backbone: mlp_backbone
   - head: base_head
   - _self_
 
@@ -14,7 +14,4 @@ wandb:
   mode: online       # online | offline | disabled
 
 seed: 42
-
-
-
 

@@ -8,4 +8,4 @@ ray_encoding: 1
 max_speed: 13  # ~5x RAYLEIGH_B, generous safety cap that barely clips the Rayleigh tail
 room_path: rooms/grid_cell_training.json
 dropout: 0.5
-num_envs: 32
+num_envs: 256

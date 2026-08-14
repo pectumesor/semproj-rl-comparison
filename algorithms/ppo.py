@@ -327,7 +327,7 @@ class MLPPPO(PPO):
         self.agent.train()
         return float(np.mean(returns)), float(np.mean(lengths))
 
-    def train(self, run_dir = None):
+    def train(self, trial_name: str, run_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
@@ -355,17 +355,17 @@ class MLPPPO(PPO):
 
             if wandb.run is not None:
                 wandb.log({
-                    "Custom PPO/Global Std": self.agent.actor.action_std.mean().item(),
-                    "Custom PPO/Mean KL-Divergence": stats.mean_kl,
-                    "Custom PPO/Mean Surrogate Loss": stats.mean_surrogate_loss,
-                    "Custom PPO/Mean Value Loss": stats.mean_value_loss,
-                    "Custom PPO/Mean Entropy": stats.mean_entropy,
-                    "Custom PPO/Mean Train Return": stats.mean_train_rew,
-                    "Custom PPO/Mean Eval Return": mean_eval_return,
-                    "Custom PPO/Mean Eval Length": mean_eval_length,
-                    "Custom PPO/Learning Rate": self.learning_rate,
-                    "Custom PPO/Clip Fraction": stats.clip_fraction,
-                    "Custom PPO/Explained Variance": stats.explained_variance,
+                    f"{trial_name}/Global Std": self.agent.actor.action_std.mean().item(),
+                    f"{trial_name}/Mean KL-Divergence": stats.mean_kl,
+                    f"{trial_name}/Mean Surrogate Loss": stats.mean_surrogate_loss,
+                    f"{trial_name}/Mean Value Loss": stats.mean_value_loss,
+                    f"{trial_name}/Mean Entropy": stats.mean_entropy,
+                    f"{trial_name}/Mean Train Return": stats.mean_train_rew,
+                    f"{trial_name}/Mean Eval Return": mean_eval_return,
+                    f"{trial_name}/Mean Eval Length": mean_eval_length,
+                    f"{trial_name}/Learning Rate": self.learning_rate,
+                    f"{trial_name}/Clip Fraction": stats.clip_fraction,
+                    f"{trial_name}/Explained Variance": stats.explained_variance,
                 })
 
             if run_dir is not None:
@@ -551,7 +551,7 @@ class RecurrentPPO(MLPPPO):
         self.agent.train()
         return float(np.mean(returns)), float(np.mean(lengths))
 
-    def train(self, run_dir = None):
+    def train(self,  trial_name: str, run_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
@@ -591,17 +591,17 @@ class RecurrentPPO(MLPPPO):
 
             if wandb.run is not None:
                 wandb.log({
-                    "Custom PPO/Global Std": self.agent.actor.action_std.mean().item(),
-                    "Custom PPO/Mean KL-Divergence": stats.mean_kl,
-                    "Custom PPO/Mean Surrogate Loss": stats.mean_surrogate_loss,
-                    "Custom PPO/Mean Value Loss": stats.mean_value_loss,
-                    "Custom PPO/Mean Entropy": stats.mean_entropy,
-                    "Custom PPO/Mean Train Return": stats.mean_train_rew,
-                    "Custom PPO/Mean Eval Return": mean_eval_return,
-                    "Custom PPO/Mean Eval Length": mean_eval_length,
-                    "Custom PPO/Learning Rate": self.learning_rate,
-                    "Custom PPO/Clip Fraction": stats.clip_fraction,
-                    "Custom PPO/Explained Variance": stats.explained_variance,
+                    f"{trial_name}/Global Std": self.agent.actor.action_std.mean().item(),
+                    f"{trial_name}/Mean KL-Divergence": stats.mean_kl,
+                    f"{trial_name}/Mean Surrogate Loss": stats.mean_surrogate_loss,
+                    f"{trial_name}/Mean Value Loss": stats.mean_value_loss,
+                    f"{trial_name}/Mean Entropy": stats.mean_entropy,
+                    f"{trial_name}/Mean Train Return": stats.mean_train_rew,
+                    f"{trial_name}/Mean Eval Return": mean_eval_return,
+                    f"{trial_name}/Mean Eval Length": mean_eval_length,
+                    f"{trial_name}/Learning Rate": self.learning_rate,
+                    f"{trial_name}/Clip Fraction": stats.clip_fraction,
+                    f"{trial_name}/Explained Variance": stats.explained_variance,
                 })
 
             if run_dir is not None:

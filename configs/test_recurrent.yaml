@@ -2,6 +2,9 @@ defaults:
   - algorithm: recurrent_ppo
   - env: base_env
   - model: base_model
+  - observation: mlp_observation
+  - backbone: lstm_backbone
+  - head: base_head
   - _self_
 
 wandb:

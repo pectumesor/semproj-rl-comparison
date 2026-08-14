@@ -1,0 +1,2 @@
+name: mlp
+backbone_hidden_sizes: [64, 64]

@@ -1,0 +1,4 @@
+name: lstm
+backbone_hidden_sizes: [64, 64]
+lstm_backbone_feature_dim: 64
+lstm_num_layers: 2

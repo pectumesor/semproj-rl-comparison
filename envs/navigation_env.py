@@ -5,7 +5,10 @@ import gymnasium as gym
 import pygame
 import imageio.v3 as iio
 from omegaconf import DictConfig
-from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends, PerlinColor, w2s
+from .env_utils import (RayCast, walls_json_to_numpy, compute_starts_and_ends,
+                         PerlinColor, w2s, bounding_box, diagonal_length)
+
+WALL_OFFSET = 10
 
 class NavigationEnv(gym.Env):
     """
@@ -52,26 +55,36 @@ class NavigationEnv(gym.Env):
         self._half_fov_rad = float(np.deg2rad(self.fov / 2.0))
         self.goal_radius  = float(cfg.env.get("goal_radius", 1e-4))
 
-        self.initial_pos = torch.tensor(
-            [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
-            dtype=torch.float32, device=device,
-        )
         self.goal_pos = torch.tensor(
             [cfg.env.goal_pos["x"], cfg.env.goal_pos["y"]],
             dtype=torch.float32, device=device,
         )
 
-        self.color_field = PerlinColor(device=device)
+        self.color_field = PerlinColor(device=device, seed=cfg.seed)
 
         self.walls = walls_json_to_numpy(cfg.env.room_path)
         ws_np, we_np = compute_starts_and_ends(self.walls)
+        self.bounding_box = bounding_box(we_np, ws_np)
+        if cfg.env.range_type == "diagonal":
+            max_range = diagonal_length(*self.bounding_box)
+        elif cfg.env.range_type == "horizontal":
+            max_range = self.bounding_box[1] - self.bounding_box[0]
+        else:
+            max_range = torch.inf
+
         wall_starts = torch.tensor(ws_np, dtype=torch.float32, device=device)
         wall_ends   = torch.tensor(we_np, dtype=torch.float32, device=device)
-        self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays).to(device)
-
+        self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays, max_range).to(device)
+      
         # Mutable state
-        self.agent_pos        = torch.zeros(num_envs, 2, dtype=torch.float32, device=device)
-        self.facing_direction = torch.zeros(num_envs,    dtype=torch.float32, device=device)
+        x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
+                                                                                self.bounding_box[1] - WALL_OFFSET)
+        y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
+                                                                                self.bounding_box[3] - WALL_OFFSET)
+        rand_pos = torch.stack([x,y], dim=-1)
+        self.agent_pos        = rand_pos
+        self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
+
         self.steps            = torch.zeros(num_envs,    dtype=torch.long,    device=device)
         self.prev_dist        = torch.zeros(num_envs,    dtype=torch.float32, device=device)
         # Proprioceptive state — last normalised action values, reset to 0 at episode start
@@ -129,8 +142,15 @@ class NavigationEnv(gym.Env):
         mask = (torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
                 if done is None else done)
 
-        self.agent_pos[mask]        = self.initial_pos
-        self.facing_direction[mask] = np.pi / 2
+        x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
+                                                                        self.bounding_box[1] - WALL_OFFSET)
+        y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
+                                                                        self.bounding_box[3] - WALL_OFFSET)
+        rand_pos = torch.stack([x,y], dim=-1)
+        rand_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
+
+        self.agent_pos[mask]        = rand_pos[mask]
+        self.facing_direction[mask] = rand_direction[mask]
         self.steps[mask]            = 0
         self.last_speed[mask]       = 0.0
         self.last_turning[mask]     = 0.0
@@ -220,7 +240,6 @@ class NavigationEnv(gym.Env):
     def render(self, obs, title, mode="human"):
 
         _SCREEN  = 900
-        _WORLD   = 100.0
         _PADDING = 60   # pixels of margin on each side
 
         if not hasattr(self, 'screen'):
@@ -234,7 +253,9 @@ class NavigationEnv(gym.Env):
                 pygame.quit()
                 quit()
 
-        scale = (_SCREEN - 2 * _PADDING) / _WORLD
+        min_x, max_x, min_y, max_y = self.bounding_box
+        world = max(max_x - min_x, max_y - min_y)
+        scale = (_SCREEN - 2 * _PADDING) / world
 
         self.screen.fill((255, 255, 255))
 
@@ -262,14 +283,15 @@ class NavigationEnv(gym.Env):
 
     def record_frame(self, obs):
         _SCREEN  = 900
-        _WORLD   = 100.0
         _PADDING = 60
 
         if not hasattr(self, '_rec_screen'):
             pygame.init()
             self._rec_screen = pygame.Surface((_SCREEN, _SCREEN))
 
-        scale = (_SCREEN - 2 * _PADDING) / _WORLD
+        min_x, max_x, min_y, max_y = self.bounding_box
+        world = max(max_x - min_x, max_y - min_y)
+        scale = (_SCREEN - 2 * _PADDING) / world
         self._rec_screen.fill((255, 255, 255))
 
         for start, end in self.walls:
@@ -293,8 +315,14 @@ class NavigationEnv(gym.Env):
         frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
         return frame
 
+    def record_rollout(self, type, agent, steps, cfg: DictConfig):
+        if type == "lstm":
+            return self.record_recurrent_rollout(agent, cfg.backbone.lstm_num_layers,
+                                                  cfg.backbone.lstm_backbone_feature_dim, steps)
+        else:
+            return self.record_mlp_rollout(agent, steps)
 
-    def record_rollout(self, agent, steps):
+    def record_mlp_rollout(self, agent, steps):
 
         frames = []
         obs, _ = self.reset()
@@ -308,16 +336,16 @@ class NavigationEnv(gym.Env):
 
         return frames
     
-    def record_recurrent_rollout(self, agent, num_layers, batch_size, hidden_size, steps):
+    def record_recurrent_rollout(self, agent, num_layers, hidden_size, steps):
 
         frames = []
         lstm_state = (
-            torch.zeros((num_layers, batch_size, hidden_size),
+            torch.zeros((num_layers, 1, hidden_size),
                         dtype=torch.float, device=self.device),
-            torch.zeros((num_layers, batch_size, hidden_size),
+            torch.zeros((num_layers, 1, hidden_size),
                          dtype=torch.float, device=self.device)
             )
-        done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+        done = torch.zeros(1, dtype=torch.bool, device=self.device)
         obs, _ = self.reset()
         for _ in range(steps):
             action, lstm_state = agent.predict_action(obs, lstm_state, done)
@@ -353,6 +381,30 @@ class NavigationEnvEasy(NavigationEnv):
             "rays":    gym.spaces.Box(0.0, 1.0,  shape=self.obs_dim, dtype=np.float32),
             "proprio": gym.spaces.Box(-1.0, 1.0, shape=(4,),          dtype=np.float32),
         })
+
+        self.initial_pos = torch.tensor(
+                    [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
+                    dtype=torch.float32, device=device,
+                )
+
+    def reset(self, seed=None, options=None, done: torch.Tensor = None):
+        """
+        done: bool tensor (num_envs,) — reset only those envs. None resets all.
+        Returns (obs, {}) where obs is (num_envs, 4, num_rays) on device.
+        """
+        mask = (torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+                if done is None else done)
+
+        self.agent_pos[mask]        = self.initial_pos
+        self.facing_direction[mask] = torch.pi / 2.0
+        self.steps[mask]            = 0
+        self.last_speed[mask]       = 0.0
+        self.last_turning[mask]     = 0.0
+
+        intersections, distances, d_unit = self.ray_cast.scan(self.agent_pos, self.facing_direction)
+        self.prev_dist = torch.norm(self.agent_pos - self.goal_pos, dim=-1)
+        return self.get_observations(intersections, distances, d_unit), {}
+        
 
     def get_observations(
         self, intersections: torch.Tensor, distances: torch.Tensor, d_unit: torch.Tensor

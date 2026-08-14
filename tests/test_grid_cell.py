@@ -35,12 +35,15 @@ print(f"Using device: {device}")
 @hydra.main( config_path="../configs", config_name="train_grid_cell", version_base=None)
 def main(cfg: DictConfig):
 
+        torch.manual_seed(cfg.seed)
+        np.random.seed(cfg.seed)
+
     #wandb.login()
 
     #with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=OmegaConf.to_container(cfg, resolve=True),
     #                 sync_tensorboard=True):
         
-        T = 1000
+        T = 700  # 15s / Δt=0.02s (Banino Table 1) ≈ 750, rounded to a multiple of block_size=100
 
         num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
         ray_dim = np.array([cfg.env.ray_encoding, num_rays])

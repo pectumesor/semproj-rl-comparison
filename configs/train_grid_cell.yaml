@@ -1,7 +1,5 @@
 defaults:
-  - algorithm: ppo
   - env: traj_gen_env
-  - model: traj_gen_model
   - _self_
 
 wandb:
@@ -12,6 +10,17 @@ wandb:
   mode: online       # online | offline | disabled
 
 seed: 42
+place_cell_size: 256
+head_dir_cell_size: 12
+sigma_c: 10  # 0.01m (Banino Table 1 sigma^(c)) * 1000 units/m
+kappa: 20
+nr_iterations: 42857
+block_size: 100
+lr: 1e-5
+
+clip_tresh: 1e-5
+momentum: 0.9
+decay: 1e-5
 
 
 

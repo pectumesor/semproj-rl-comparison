@@ -22,8 +22,8 @@ class RayCast:
         e = p - o
     """
 
-    def __init__(self, cfg, wall_starts: torch.Tensor, wall_ends: torch.Tensor, num_rays: int):
-        self.max_range = cfg.env.max_range
+    def __init__(self, cfg, wall_starts: torch.Tensor, wall_ends: torch.Tensor, num_rays: int, max_range: int):
+        self.max_range = max_range
         self.fov       = cfg.env.fov
         self.num_rays  = num_rays
 
@@ -219,3 +219,12 @@ def bounding_box(wall_ends, wall_starts):
     max_x, max_y = np.max(points, axis=0)
 
     return min_x, max_x, min_y, max_y
+
+def diagonal_length(min_x, max_x, min_y, max_y):
+
+    left_point = torch.tensor([min_x, min_y], dtype=torch.float32)
+    right_point = torch.tensor([max_x, max_y], dtype=torch.float32)
+
+    diagonal_vector = right_point - left_point
+
+    return torch.linalg.norm(diagonal_vector)

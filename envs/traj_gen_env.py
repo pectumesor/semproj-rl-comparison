@@ -9,7 +9,8 @@ import gymnasium as gym
 import pygame
 import imageio.v3 as iio
 from omegaconf import DictConfig
-from .env_utils import RayCast, walls_json_to_numpy, compute_starts_and_ends, PerlinColor, w2s, bounding_box
+from .env_utils import (RayCast, walls_json_to_numpy, compute_starts_and_ends,
+                         PerlinColor, w2s, bounding_box, diagonal_length)
 
 class TrajGenEnv(gym.Env):
     """
@@ -41,7 +42,6 @@ class TrajGenEnv(gym.Env):
         self.act_dim   = cfg.env.act_dim
         self.max_speed = cfg.env.max_speed
         self.fov       = cfg.env.fov
-        self.max_steps = cfg.algorithm.max_steps
         self.num_rays  = num_rays
         self.num_envs  = num_envs
         self.device    = device
@@ -51,9 +51,16 @@ class TrajGenEnv(gym.Env):
         self.walls = walls_json_to_numpy(cfg.env.room_path)
         ws_np, we_np = compute_starts_and_ends(self.walls)
         self.bounding_box = [*bounding_box(we_np, ws_np)]
+        if cfg.env.range_type == "diagonal":
+            max_range = diagonal_length(*self.bounding_box)
+        elif cfg.env.range_type == "horizontal":
+            max_range = self.bounding_box[1] - self.bounding_box[0]
+        else:
+            max_range = torch.inf
+
         wall_starts = torch.tensor(ws_np, dtype=torch.float32, device=device)
         wall_ends   = torch.tensor(we_np, dtype=torch.float32, device=device)
-        self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays).to(device)
+        self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays, max_range).to(device)
 
         # Mutable state
         self.agent_pos        = torch.zeros(num_envs, 2, dtype=torch.float32, device=device)

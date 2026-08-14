@@ -42,6 +42,9 @@ print(f"Using device: {device}")
 @hydra.main( config_path="../configs", config_name="test_recurrent", version_base=None)
 def main(cfg: DictConfig):
 
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+
     wandb.login()
 
     with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=OmegaConf.to_container(cfg, resolve=True),
@@ -67,7 +70,8 @@ def main(cfg: DictConfig):
         vec_env = make_vec_env(lambda: NavigationEnvSB3(cfg=cfg,
                                                          num_rays=num_rays,
                                                           ray_dim=ray_dim,
-                                                           proprio_dim=cfg.env.proprio_dim), n_envs=cfg.env.num_envs)
+                                                           proprio_dim=cfg.env.proprio_dim), n_envs=cfg.env.num_envs,
+                                seed=cfg.seed)
 
         log_dir = ROOT_DIR / "logs" / f"{cfg.algorithm.name}"
         run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")

@@ -1,0 +1,2 @@
+name: mlp
+obs_embed_hidden_sizes: [64, 64]

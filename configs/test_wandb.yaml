@@ -1,7 +1,9 @@
 defaults:
   - algorithm: ppo
   - env: easy_env
-  - model: base_model
+  - observation: mlp_observation
+  - backbone: mlp_backbone
+  - head: base_head
   - _self_
 
 wandb:
