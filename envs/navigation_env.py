@@ -133,7 +133,7 @@ class NavigationEnv(gym.Env):
 
     def compile(self, mode: str = "reduce-overhead"):
         """Fuse hot-path kernels with torch.compile. Call once after construction."""
-        if self.device == "cpu":
+        if torch.device(self.device).type == "cpu":
             return self
         self.ray_cast.scan   = torch.compile(self.ray_cast.scan,   mode=mode)
         self.get_observations = torch.compile(self.get_observations, mode=mode)
@@ -468,6 +468,3 @@ class NavigationEnvEasy(NavigationEnv):
         reward += (self.prev_dist - dist_to_goal) / (self.ray_cast.max_range * self.max_steps)
 
         return reward
-
-
-

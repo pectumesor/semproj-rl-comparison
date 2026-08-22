@@ -366,7 +366,7 @@ class MLPPPO(PPO):
                     f"Learning Rate": self.learning_rate,
                     f"Clip Fraction": stats.clip_fraction,
                     f"Explained Variance": stats.explained_variance,
-                }, step=iteration)
+                })
 
             if run_dir is not None:
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
@@ -603,7 +603,7 @@ class RecurrentPPO(MLPPPO):
                     f"Learning Rate": self.learning_rate,
                     f"Clip Fraction": stats.clip_fraction,
                     f"Explained Variance": stats.explained_variance,
-                }, step=iteration)
+                })
 
             if run_dir is not None:
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
