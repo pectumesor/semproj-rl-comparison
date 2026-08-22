@@ -9,9 +9,8 @@ defaults:
 wandb:
   project: semproj
   entity: eazevedo-eth-z-rich
-  group: test        
-  tags: [ppo]
+  group: ablation    
   mode: online       # online | offline | disabled
 
-seed: 42
+seed: 0
 

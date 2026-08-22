@@ -36,7 +36,15 @@ def main(cfg: DictConfig):
     wandb.login()
 
     with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=OmegaConf.to_container(cfg, resolve=True),
-                     sync_tensorboard=True):
+                    group=cfg.wandb.group, name=f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}_seed_{cfg.seed}",
+                    tags=[cfg.backbone.name, cfg.observation.name, f"seed_{cfg.seed}", cfg.algorithm.name],
+                    sync_tensorboard=True, reinit=True):
+
+        trial_name = wandb.run.name
+        log_dir = ROOT_DIR / "logs" / f"{trial_name}"
+        run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
+        run_dir = log_dir / run_name
+        
 
         num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
         ray_dim = np.array([cfg.env.ray_encoding, num_rays])
@@ -55,13 +63,6 @@ def main(cfg: DictConfig):
         algorithm = create_algorithm(cfg=cfg, type=cfg.backbone.name, buffer=buffer, device=device,
                                      env=env, eval_env=eval_env, agent=agent)
 
-        trial_name = f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}"
-
-        log_dir = ROOT_DIR / "logs" / f"{trial_name}"
-        run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
-        run_dir = log_dir / run_name
-
-
         algorithm.train(trial_name=trial_name, run_dir=run_dir)
         
         agent.load_model(run_dir / f"iter_{cfg.algorithm.n_iterations}.pt", device, algorithm.optimizer)
@@ -74,7 +75,7 @@ def main(cfg: DictConfig):
         save_video(frames, custom_video_path)
 
         wandb.log({
-                    f"{trial_name}/Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
+                    f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
                 })
 
 if __name__ == "__main__":

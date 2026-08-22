@@ -51,6 +51,7 @@ class NavigationEnv(gym.Env):
         self.num_envs  = num_envs
         self.device    = device
         self.agent     = agent
+        self.random_pos_flag = cfg.env.rand_pos == "True"
 
         self._half_fov_rad = float(np.deg2rad(self.fov / 2.0))
         self.goal_radius  = float(cfg.env.get("goal_radius", 1e-4))
@@ -77,13 +78,25 @@ class NavigationEnv(gym.Env):
         self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays, max_range).to(device)
       
         # Mutable state
-        x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
+        self.agent_pos = torch.zeros(self.num_envs, 2, dtype=torch.float32, device=self.device)
+        if self.random_pos_flag:
+            x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
                                                                                 self.bounding_box[1] - WALL_OFFSET)
-        y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
+            y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
                                                                                 self.bounding_box[3] - WALL_OFFSET)
-        rand_pos = torch.stack([x,y], dim=-1)
-        self.agent_pos        = rand_pos
-        self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
+            rand_pos = torch.stack([x,y], dim=-1)
+            self.agent_pos        = rand_pos
+            self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
+        else:
+            self.initial_pos = torch.tensor(
+                    [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
+                    dtype=torch.float32, device=device,
+                )
+            
+            self.facing_direction = torch.full(
+                (self.num_envs,), torch.pi / 2.0, dtype=torch.float32, device=device,
+            )
+
 
         self.steps            = torch.zeros(num_envs,    dtype=torch.long,    device=device)
         self.prev_dist        = torch.zeros(num_envs,    dtype=torch.float32, device=device)
@@ -120,6 +133,8 @@ class NavigationEnv(gym.Env):
 
     def compile(self, mode: str = "reduce-overhead"):
         """Fuse hot-path kernels with torch.compile. Call once after construction."""
+        if self.device == "cpu":
+            return self
         self.ray_cast.scan   = torch.compile(self.ray_cast.scan,   mode=mode)
         self.get_observations = torch.compile(self.get_observations, mode=mode)
         self.color_field      = torch.compile(self.color_field,      mode=mode)
@@ -149,8 +164,8 @@ class NavigationEnv(gym.Env):
         rand_pos = torch.stack([x,y], dim=-1)
         rand_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
 
-        self.agent_pos[mask]        = rand_pos[mask]
-        self.facing_direction[mask] = rand_direction[mask]
+        self.agent_pos[mask]        = rand_pos[mask] if self.random_pos_flag else self.initial_pos
+        self.facing_direction[mask] = rand_direction[mask] if self.random_pos_flag else torch.pi / 2.0
         self.steps[mask]            = 0
         self.last_speed[mask]       = 0.0
         self.last_turning[mask]     = 0.0

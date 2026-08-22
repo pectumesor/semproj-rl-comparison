@@ -355,18 +355,18 @@ class MLPPPO(PPO):
 
             if wandb.run is not None:
                 wandb.log({
-                    f"{trial_name}/Global Std": self.agent.actor.action_std.mean().item(),
-                    f"{trial_name}/Mean KL-Divergence": stats.mean_kl,
-                    f"{trial_name}/Mean Surrogate Loss": stats.mean_surrogate_loss,
-                    f"{trial_name}/Mean Value Loss": stats.mean_value_loss,
-                    f"{trial_name}/Mean Entropy": stats.mean_entropy,
-                    f"{trial_name}/Mean Train Return": stats.mean_train_rew,
-                    f"{trial_name}/Mean Eval Return": mean_eval_return,
-                    f"{trial_name}/Mean Eval Length": mean_eval_length,
-                    f"{trial_name}/Learning Rate": self.learning_rate,
-                    f"{trial_name}/Clip Fraction": stats.clip_fraction,
-                    f"{trial_name}/Explained Variance": stats.explained_variance,
-                })
+                    f"Global Std": self.agent.actor.action_std.mean().item(),
+                    f"Mean KL-Divergence": stats.mean_kl,
+                    f"Mean Surrogate Loss": stats.mean_surrogate_loss,
+                    f"Mean Value Loss": stats.mean_value_loss,
+                    f"Mean Entropy": stats.mean_entropy,
+                    f"Mean Train Return": stats.mean_train_rew,
+                    f"Mean Eval Return": mean_eval_return,
+                    f"Mean Eval Length": mean_eval_length,
+                    f"Learning Rate": self.learning_rate,
+                    f"Clip Fraction": stats.clip_fraction,
+                    f"Explained Variance": stats.explained_variance,
+                }, step=iteration)
 
             if run_dir is not None:
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
@@ -566,8 +566,9 @@ class RecurrentPPO(MLPPPO):
 
         rollout_lstm_state = initial_lstm_state
 
-        iterations_bar = tqdm(iterable=range(self.n_iterations), total=self.n_iterations, 
+        iterations_bar = tqdm(iterable=range(self.n_iterations), total=self.n_iterations,
                               desc="Training PPO")
+
 
         for iter in iterations_bar:
 
@@ -591,18 +592,18 @@ class RecurrentPPO(MLPPPO):
 
             if wandb.run is not None:
                 wandb.log({
-                    f"{trial_name}/Global Std": self.agent.actor.action_std.mean().item(),
-                    f"{trial_name}/Mean KL-Divergence": stats.mean_kl,
-                    f"{trial_name}/Mean Surrogate Loss": stats.mean_surrogate_loss,
-                    f"{trial_name}/Mean Value Loss": stats.mean_value_loss,
-                    f"{trial_name}/Mean Entropy": stats.mean_entropy,
-                    f"{trial_name}/Mean Train Return": stats.mean_train_rew,
-                    f"{trial_name}/Mean Eval Return": mean_eval_return,
-                    f"{trial_name}/Mean Eval Length": mean_eval_length,
-                    f"{trial_name}/Learning Rate": self.learning_rate,
-                    f"{trial_name}/Clip Fraction": stats.clip_fraction,
-                    f"{trial_name}/Explained Variance": stats.explained_variance,
-                })
+                    f"Global Std": self.agent.actor.action_std.mean().item(),
+                    f"Mean KL-Divergence": stats.mean_kl,
+                    f"Mean Surrogate Loss": stats.mean_surrogate_loss,
+                    f"Mean Value Loss": stats.mean_value_loss,
+                    f"Mean Entropy": stats.mean_entropy,
+                    f"Mean Train Return": stats.mean_train_rew,
+                    f"Mean Eval Return": mean_eval_return,
+                    f"Mean Eval Length": mean_eval_length,
+                    f"Learning Rate": self.learning_rate,
+                    f"Clip Fraction": stats.clip_fraction,
+                    f"Explained Variance": stats.explained_variance,
+                }, step=iteration)
 
             if run_dir is not None:
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
