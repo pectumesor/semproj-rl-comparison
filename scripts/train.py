@@ -23,9 +23,6 @@ import numpy as np
 device = torch.device( "mps" if torch.backends.mps.is_available() 
                       else "cuda" if torch.cuda.is_available()
                       else "cpu" )
-device = torch.device("cpu")
-print(f"Using device: {device}")
-
 
 @hydra.main( config_path="../configs", config_name="base", version_base=None)
 def main(cfg: DictConfig):
