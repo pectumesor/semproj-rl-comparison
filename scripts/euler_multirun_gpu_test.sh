@@ -37,11 +37,12 @@ cd "${PROJECT_ROOT}"
 python scripts/train.py --multirun \
     hydra/launcher=euler \
     hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
+    hydra.launcher.gpu_per_node=1 \
     env.room_path="rooms/four_room.json" \
     env.goal_radius=16 \
     env.goal_pos.x=40 \
     env.goal_pos.y=40 \
-    wandb.group=euler_test \
+    wandb.group=euler_gpu_test \
     observation=mlp_observation,cnn_observation \
     backbone=lstm_backbone,mlp_backbone \
     seed=0,1,2,3,4

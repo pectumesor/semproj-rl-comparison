@@ -1,21 +1,17 @@
 # @package hydra.launcher
 # Submits each --multirun job as its own sbatch job on ETH Euler.
-_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SubmititLauncher
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
 
 submitit_folder: ${hydra.sweep.dir}/.submitit/%j
 
-timeout_min: 5
+timeout_min: 120
 tasks_per_node: 1
 cpus_per_task: 1
 nodes: 1
 name: ${hydra.job.name}
+mem_per_cpu: "1G"
 
-# GPU request, mirrors #SBATCH --gres=gpu:N. 
+# GPU request, mirrors #SBATCH --gres=gpu:N.
 #Leave at 0 for CPU-only sweeps.
 gpus_per_node: 0
-
-
-# Raw sbatch flags with no native submitit field.
-additional_parameters:
-  mem-per-cpu: "1G"
 
