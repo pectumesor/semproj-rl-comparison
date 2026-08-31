@@ -483,7 +483,7 @@ class RecurrentPPO(MLPPPO):
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
-            intr_loss = self.compute_aux_loss()
+            intr_loss = self.compute_aux_loss() # TODO: Implement auxiliary heads for this
             task_loss = surrogate_loss + self.val_coeff * value_loss + self.entropy_coeff * entropy_loss
             loss = self.task_coeff * task_loss + self.intr_coeff * intr_loss
 

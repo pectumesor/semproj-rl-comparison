@@ -220,6 +220,7 @@ class NavigationEnv(gym.Env):
 
         no_hit   = torch.isinf(distances)
         wall_hit = ~no_hit
+        wall_dist = torch.where(no_hit, torch.full_like(distances, max_range), distances)
 
         # Ray-circle test for goal: rays are not cast against the goal as geometry,
         # so we project each ray onto the goal disk directly.
@@ -227,7 +228,7 @@ class NavigationEnv(gym.Env):
         t_goal = (to_goal * d_unit).sum(dim=-1).clamp(0.0, max_range)                  # (E, R)
         closest = self.agent_pos[:, None, :] + t_goal[:, :, None] * d_unit            # (E, R, 2)
         dist_sq_to_goal = ((closest - self.goal_pos[None, None, :]) ** 2).sum(dim=-1) # (E, R)
-        wall_dist = torch.where(no_hit, torch.full_like(distances, max_range), distances)
+        
         goal_hit = (dist_sq_to_goal <= self.goal_radius ** 2) & (t_goal < wall_dist)
         wall_hit = wall_hit & ~goal_hit
 
@@ -240,11 +241,11 @@ class NavigationEnv(gym.Env):
 
         goal_pos_exp = self.goal_pos[None, None, :].expand(self.num_envs, self.num_rays, 2)
         sample_pts = torch.where(goal_hit[:, :, None], goal_pos_exp, intersections)
-        rgb = self.color_field(sample_pts[:, :, 0], sample_pts[:, :, 1])
-        rgb = torch.where(no_hit[:, :, None], torch.zeros_like(rgb), rgb)
+        rgb = self.color_field(sample_pts[:, :, 0], sample_pts[:, :, 1]) # Sample Perlin Noise color for the ray intersections
+        rgb = torch.where(no_hit[:, :, None], torch.zeros_like(rgb), rgb) # No wall or goal, Black
         rays[:, 4:, :] = rgb.permute(0, 2, 1)
 
-        # Proprioceptive: vestibular-style rates only (no absolute heading — humans don't have a compass)
+        # Proprioceptive
         proprio = torch.stack([
             self.last_speed,
             self.last_turning,

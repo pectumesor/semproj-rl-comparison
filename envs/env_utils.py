@@ -4,10 +4,6 @@ import json
 import math
 
 
-def _cross2d(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """2-D cross product (scalar) on the last axis: a[...,0]*b[...,1] - a[...,1]*b[...,0]."""
-    return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
-
 
 class RayCast:
     """
@@ -185,6 +181,12 @@ class PerlinColor:
 # ---------------------------------------------------------------------------
 # Utility functions (numpy — used only at startup to load room geometry)
 # ---------------------------------------------------------------------------
+
+
+def _cross2d(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """2-D cross product (scalar) on the last axis: a.x * b.y - a.y * b.x """
+    return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+
 
 def walls_json_to_numpy(json_path: str):
     walls = []

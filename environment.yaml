@@ -17,6 +17,8 @@ dependencies:
     - tensorboard
     - imageio
     - imageio-ffmpeg
+    - triangle
+    - networkx[default]
 
   # Config management
   - pip:
