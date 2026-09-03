@@ -9,8 +9,9 @@ import gymnasium as gym
 import pygame
 import imageio.v3 as iio
 from omegaconf import DictConfig
-from .env_utils import (RayCast, walls_json_to_numpy, compute_starts_and_ends,
-                         PerlinColor, w2s, bounding_box, diagonal_length)
+from .env_utils import RayCast, PerlinColor
+from utils.geometry import (walls_json_to_numpy, compute_starts_and_ends,
+                             w2s, bounding_box, diagonal_length)
 
 class TrajGenEnv(gym.Env):
     """

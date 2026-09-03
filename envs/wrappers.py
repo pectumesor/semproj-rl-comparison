@@ -8,7 +8,7 @@ from .navigation_env import NavigationEnvEasy, NavigationEnv
 from models.embeddings.simple import MLPObservationEmbeddings
 from models.backbones.mlp_backbone import MLPBackbone
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from .env_utils import w2s
+from utils.geometry import w2s
 
 
 class NavigationEnvSB3(gym.Env):

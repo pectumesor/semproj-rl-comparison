@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from models.embeddings.grid_cell import GridCellNetwork
-from envs import TrajGenEnv
 from tqdm import tqdm
 from pathlib import Path
 
@@ -41,6 +40,7 @@ class TrajGenAgent(nn.Module):
                                                  head_dir_cell_size=self.M,
                                                  batch_size=cfg.env.num_envs).to(device)
         
+        from envs import TrajGenEnv  # deferred: envs -> utils.geometry -> utils -> models is circular at module scope
         self.env = TrajGenEnv(cfg=cfg, num_envs=cfg.env.num_envs, obs_dim=obs_dim,
                               num_rays=num_rays, device=device)
         

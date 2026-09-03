@@ -5,8 +5,9 @@ import gymnasium as gym
 import pygame
 import imageio.v3 as iio
 from omegaconf import DictConfig
-from .env_utils import (RayCast, walls_json_to_numpy, compute_starts_and_ends,
-                         PerlinColor, w2s, bounding_box, diagonal_length)
+from .env_utils import RayCast, PerlinColor
+from utils.geometry import (walls_json_to_numpy, compute_starts_and_ends,
+                             w2s, bounding_box, diagonal_length)
 
 WALL_OFFSET = 10
 
@@ -131,15 +132,6 @@ class NavigationEnv(gym.Env):
             shape=(self.act_dim,)
         )
 
-    def compile(self, mode: str = "reduce-overhead"):
-        """Fuse hot-path kernels with torch.compile. Call once after construction."""
-        if torch.device(self.device).type == "cpu":
-            return self
-        self.ray_cast.scan   = torch.compile(self.ray_cast.scan,   mode=mode)
-        self.get_observations = torch.compile(self.get_observations, mode=mode)
-        self.color_field      = torch.compile(self.color_field,      mode=mode)
-        return self
-
     def compute_reward(self, terminated):
         reward = torch.full(
             (self.num_envs,), -1.0 / self.max_steps,
@@ -172,7 +164,7 @@ class NavigationEnv(gym.Env):
 
         intersections, distances, d_unit = self.ray_cast.scan(self.agent_pos, self.facing_direction)
         self.prev_dist = torch.norm(self.agent_pos - self.goal_pos, dim=-1)
-        return self.get_observations(intersections, distances, d_unit), {}
+        return self.get_observations(intersections, distances, d_unit), {"agent_pos": self.agent_pos}
 
     def step(self, action: torch.Tensor):
         """

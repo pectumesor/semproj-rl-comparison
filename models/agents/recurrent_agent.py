@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from envs.env_utils import *
 from typing import Optional, Tuple
 from ..heads import GuassianPolicyHead
 from ..backbones import SimpleLSTM

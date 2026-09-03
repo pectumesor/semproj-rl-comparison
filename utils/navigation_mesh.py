@@ -7,6 +7,7 @@ import numpy as np
 import triangle as tr
 import networkx as nx
 import matplotlib.pyplot as plt
+import wandb
 
 def sign(p, a, b):
     """
@@ -114,8 +115,8 @@ def triangle_adjacency_graph(vertices, triangles, triangle_neighbors, segments):
             if n == -1:
                 continue
             u, v = triangles[i][(k + 1) % 3], triangles[i][(k + 2) % 3]
-            w = float(np.linalg.norm(centroids[i] - centroids[n]))
-            if is_wall_segment(u, v, segments):
+            w = float(np.linalg.norm(centroids[i] - centroids[n])) # Weight is centroid distance between neighboring triangles
+            if is_wall_segment(u, v, segments): # If triangle share a wall segment, then crossing here has a huge penalty
                 w += WALL_CROSSING_PENALTY
             G.add_edge(i, n, weight=w)
 
@@ -276,6 +277,40 @@ def funnel_algorithm(centroid_path, triangle_path, triangulation, start, end):
 
    return string_pull(portals_left, portals_right)
 
+def generate_reference_trajectory(json_path: str):
+
+    room, start, end = extract_vertices_and_segments(json_path)
+
+    t = tr.triangulate(room, 'pn')
+
+    _, T = generate_graphs(t)
+
+    path = shortest_triangle_path(T, t["vertices"], t["triangles"], start, end)
+
+    centroid_path = shortest_centroid_path(t["vertices"], t["triangles"], path)
+
+    funnel_path = np.array(funnel_algorithm(centroid_path, path, t, start, end))
+
+    log_room_and_path(t, room, path, funnel_path, start, end)
+
+    return funnel_path
+
+def log_room_and_path(triangulation, room,
+                   shortest_path, funnel_path, start, end):
+
+    tr.compare(plt, room ,triangulation)
+    ax = plt.gcf().axes[-1]
+    plot_path(ax, triangulation["vertices"],
+               triangulation["triangles"], shortest_path, start, end)
+    ax.plot(funnel_path[:, 0], funnel_path[:, 1], color="magenta", linewidth=2,
+            marker="o", markersize=4, zorder=7, label="funnel path")
+    ax.plot(*start, marker="s", color="green", markersize=8, zorder=8)
+    ax.plot(*end, marker="*", color="red", markersize=12, zorder=8)
+    ax.legend()
+    wandb.log({
+            "Room": plt
+        })
+
 def test_triangulation(json_path: str):
 
     room, start, end = extract_vertices_and_segments(json_path)
@@ -290,6 +325,8 @@ def test_triangulation(json_path: str):
     centroid_path = shortest_centroid_path(t["vertices"], t["triangles"], path)
     funnel = np.array(funnel_algorithm(centroid_path, path, t, start, end))
 
+    print(f"Funnel points: {funnel} and its shape: {funnel.shape}")
+
     tr.compare(plt, room, t)
     ax = plt.gcf().axes[-1]
     plot_path(ax, t["vertices"], t["triangles"], path, start, end)
@@ -299,7 +336,7 @@ def test_triangulation(json_path: str):
     ax.plot(*end, marker="*", color="red", markersize=12, zorder=8)
     ax.legend()
     plt.show()
-
+    
 
 if __name__ == "__main__":
     test_triangulation("rooms/four_room.json")

@@ -4,7 +4,6 @@ from models import (MLPObservationEmbeddings, CNNObservationEmbeddings,
 
 from algorithms import MLPPPO, RecurrentPPO, RolloutBuffer, ReplayBuffer
 
-from envs import MyBackbone
 from omegaconf import DictConfig
 from stable_baselines3 import PPO, SAC
 from sb3_contrib import RecurrentPPO as SB3RecurrentPPO
@@ -96,6 +95,7 @@ def create_sac_agent(observation_type: str, backbone_type: str, ray_dim:int, cfg
 
 def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env, tensorboard_log: str = None):
 
+    from envs import MyBackbone  # deferred: envs -> utils.geometry -> utils -> models is circular at module scope
     features_extractor_kwargs = dict(
         features_extractor_class=MyBackbone,
         features_extractor_kwargs=dict(
@@ -157,7 +157,8 @@ def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env, tensorbo
         )
 
 def create_sb3_sac_agent(cfg: DictConfig, ray_dim: int, env):
-    
+
+    from envs import MyBackbone  # deferred: envs -> utils.geometry -> utils -> models is circular at module scope
     features_extractor_kwargs = dict(
         features_extractor_class=MyBackbone,
         features_extractor_kwargs=dict(

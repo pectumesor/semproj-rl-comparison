@@ -1,8 +1,7 @@
 import torch
 import numpy as np
-import json
-import math
 
+from utils.geometry import cross2d
 
 
 class RayCast:
@@ -53,14 +52,14 @@ class RayCast:
         r = self._r                                              # (W, 2)
         e = self.wall_starts[None, :, :] - positions[:, None, :]  # (E, W, 2)
 
-        e_cross_r = _cross2d(e, r[None, :, :])[:, None, :]     # (E, 1, W)
+        e_cross_r = cross2d(e, r[None, :, :])[:, None, :]     # (E, 1, W)
 
         d_exp = d[:, :, None, :]        # (E, R, 1, 2)
         r_exp = r[None, None, :, :]     # (1, 1, W, 2)
         e_exp = e[:, None, :, :]        # (E, 1, W, 2)
 
-        d_cross_r = _cross2d(d_exp, r_exp) + 1e-8  # (E, R, W)
-        e_cross_d = _cross2d(e_exp, d_exp)          # (E, R, W)
+        d_cross_r = cross2d(d_exp, r_exp) + 1e-8  # (E, R, W)
+        e_cross_d = cross2d(e_exp, d_exp)          # (E, R, W)
 
         t = e_cross_r / d_cross_r  # (E, R, W)
         s = e_cross_d / d_cross_r  # (E, R, W)
@@ -177,56 +176,3 @@ class PerlinColor:
         chans = [self._fbm(p, x, y) for p in self.perms]   # 3 × (E, R)
         rgb = torch.stack(chans, dim=-1)                   # (E, R, 3)
         return (rgb + 1.0) * 0.5                            # → [0, 1]
-
-# ---------------------------------------------------------------------------
-# Utility functions (numpy — used only at startup to load room geometry)
-# ---------------------------------------------------------------------------
-
-
-def _cross2d(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """2-D cross product (scalar) on the last axis: a.x * b.y - a.y * b.x """
-    return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
-
-
-def walls_json_to_numpy(json_path: str):
-    walls = []
-    with open(json_path) as f:
-        for edge in json.load(f)["edges"]:
-            walls.append(([edge["from"]["x"], edge["from"]["y"]],
-                          [edge["to"]["x"],   edge["to"]["y"]]))
-    return walls
-
-
-def compute_starts_and_ends(walls):
-    wall_starts = np.array([p for p, _ in walls], dtype=np.float32)
-    wall_ends   = np.array([q for _, q in walls], dtype=np.float32)
-    return wall_starts, wall_ends
-
-
-def compute_num_rays(fov, ray_density):
-    num_rays = int(fov * ray_density)
-    if num_rays % 2 == 0:
-        num_rays += 1
-    return num_rays
-
-def w2s(pos, scale, screen_size, padding):
-            """World (x, y) → pygame pixel (px, py) with Y-flip and padding."""
-            return (int(float(pos[0]) * scale) + padding,
-                    int(screen_size - padding - float(pos[1]) * scale))
-
-def bounding_box(wall_ends, wall_starts):
-
-    points = np.concatenate([wall_ends, wall_starts], axis=0)
-    min_x, min_y = np.min(points, axis=0)
-    max_x, max_y = np.max(points, axis=0)
-
-    return min_x, max_x, min_y, max_y
-
-def diagonal_length(min_x, max_x, min_y, max_y):
-
-    left_point = torch.tensor([min_x, min_y], dtype=torch.float32)
-    right_point = torch.tensor([max_x, max_y], dtype=torch.float32)
-
-    diagonal_vector = right_point - left_point
-
-    return torch.linalg.norm(diagonal_vector).item()

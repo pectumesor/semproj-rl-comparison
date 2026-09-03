@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from envs.env_utils import *
 from ..heads import GuassianPolicyHead, SquashedGaussianPolicyHead, DoubleQNet, ValueNet
 from pathlib import Path
 from .base_agent import BaseAgent
