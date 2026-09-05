@@ -12,6 +12,7 @@ import gymnasium as gym
 from tqdm import tqdm
 
 from models.agents import PPOAgent, RecurrentPPOAgent
+from .early_stopping import EarlyStopping
 
 @dataclass
 class PPOUpdateStats:
@@ -78,6 +79,13 @@ class MLPPPO(PPO):
         self.mini_batch = cfg.algorithm.mini_batch_size
         self.n_epochs = cfg.algorithm.n_epochs
         self.save_interval = cfg.algorithm.save_interval
+
+        # -- Early Stopping --
+        es_cfg = cfg.algorithm.early_stopping
+        self.early_stopping_enabled = bool(es_cfg.enabled)
+        self.early_stopper = EarlyStopping(
+            patience=es_cfg.patience, min_delta=es_cfg.min_delta, ema_alpha=es_cfg.ema_alpha,
+        )
 
         # -- Constants
         self.gamma = cfg.env.gamma
@@ -340,6 +348,8 @@ class MLPPPO(PPO):
             mean_eval_return, mean_eval_length = self.evaluate_policy()
             iteration = iter + 1
 
+            converged = self.early_stopping_enabled and self.early_stopper.step(mean_eval_return)
+
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
@@ -369,9 +379,25 @@ class MLPPPO(PPO):
                 })
 
             if run_dir is not None:
+                if self.early_stopping_enabled and self.early_stopper.improved:
+                    self.agent.save_model(run_dir / "best.pt", self.optimizer)
+
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
                     model_path = run_dir / f"iter_{iteration}.pt"
                     self.agent.save_model(model_path, self.optimizer)
+
+            if converged:
+                print(
+                    f"[PPO] Early stopping at iteration={iteration}/{self.n_iterations}: "
+                    f"eval return plateaued (best EMA={self.early_stopper.best:.4f})"
+                )
+
+                wandb.log({
+                    f"Early stopping": {iteration}/{self.n_iterations},
+                    f"Best Eval Return EMA": {self.early_stopper.best}
+                })
+                
+                break
 
 class RecurrentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
@@ -577,7 +603,9 @@ class RecurrentPPO(MLPPPO):
             mean_eval_return, mean_eval_length = self.evaluate_policy()
             iteration = iter + 1
 
-            print( 
+            converged = self.early_stopping_enabled and self.early_stopper.step(mean_eval_return)
+
+            print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
             f"global_std={self.agent.actor.action_std.mean().item():.4f} "
@@ -606,6 +634,21 @@ class RecurrentPPO(MLPPPO):
                 })
 
             if run_dir is not None:
+                if self.early_stopping_enabled and self.early_stopper.improved:
+                    self.agent.save_model(run_dir / "best.pt", self.optimizer)
+
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
                     model_path = run_dir / f"iter_{iteration}.pt"
                     self.agent.save_model(model_path, self.optimizer)
+
+            if converged:
+                print(
+                    f"[PPO] Early stopping at iteration={iteration}/{self.n_iterations}: "
+                    f"eval return plateaued (best EMA={self.early_stopper.best:.4f})"
+                )
+
+                wandb.log({
+                    f"Early stopping": {iteration}/{self.n_iterations},
+                    f"Best Eval Return EMA": {self.early_stopper.best}
+                })
+                break

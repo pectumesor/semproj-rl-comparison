@@ -27,6 +27,17 @@ def walls_json_to_numpy(json_path: str):
                           [edge["to"]["x"],   edge["to"]["y"]]))
     return walls
 
+def start_goal_pos_from_json(json_path: str):
+    with open(json_path) as f:
+        data = json.load(f)
+
+    start_pos = [data["start_pos"]["x"], data["start_pos"]["y"]]
+    end_pos = [data["goal_pos"]["x"], data["goal_pos"]["y"]]
+
+    return start_pos, end_pos
+
+    
+
 def convert_hospital_json_format(input_path: str, output_path: str):
 
     """

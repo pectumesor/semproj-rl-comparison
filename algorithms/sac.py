@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from models.agents import SACAgent, RecurrentSACAgent
 from models.heads import DoubleQNet
+from .early_stopping import EarlyStopping
 
 
 @dataclass
@@ -96,6 +97,13 @@ class MLPSAC(SAC):
         self.train_freq = cfg.algorithm.train_freq
         self.eval_freq = cfg.algorithm.eval_freq
         self.save_interval = cfg.algorithm.save_interval
+
+        # -- Early Stopping --
+        es_cfg = cfg.algorithm.early_stopping
+        self.early_stopping_enabled = bool(es_cfg.enabled)
+        self.early_stopper = EarlyStopping(
+            patience=es_cfg.patience, min_delta=es_cfg.min_delta, ema_alpha=es_cfg.ema_alpha,
+        )
 
 
         # -- Architecture --
@@ -267,9 +275,11 @@ class MLPSAC(SAC):
                 mean_stats = mean_stats.mean()
               
             
+            converged = False
             if steps >= self.warm_start_steps and steps % self.eval_freq == 0:
                 eval_step += 1
                 mean_returns, mean_episode_lengths = self.evaluate_policy()
+                converged = self.early_stopping_enabled and self.early_stopper.step(mean_returns)
 
                 print(
                 f"[SAC] eval_step={eval_step} "
@@ -296,14 +306,31 @@ class MLPSAC(SAC):
                     })
 
             if run_dir is not None:
+                optimizers = {
+                    "actor": self.actor_optimizer,
+                    "critic": self.critic_optimizer,
+                    "alpha": self.alpha_optimizer
+                }
+
+                if self.early_stopping_enabled and self.early_stopper.improved:
+                    self.agent.save_model(run_dir / "best.pt", optimizers)
+
                 if iter % self.save_interval == 0 or iter == self.n_iterations:
                     model_path = run_dir / f"iter_{iter}.pt"
-                    optimizers = {
-                        "actor": self.actor_optimizer,
-                        "critic": self.critic_optimizer,
-                        "alpha": self.alpha_optimizer
-                    }
                     self.agent.save_model(model_path, optimizers)
+
+            if converged:
+                print(
+                    f"[SAC] Early stopping at iteration={iter}/{self.n_iterations}: "
+                    f"eval return plateaued (best EMA={self.early_stopper.best:.4f})"
+                )
+
+                wandb.log({
+                    f"Early stopping": {iter+1}/{self.n_iterations},
+                    f"Best Eval Return EMA": {self.early_stopper.best}
+                    })
+                
+                break
 
 
         

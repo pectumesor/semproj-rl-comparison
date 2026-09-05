@@ -14,12 +14,11 @@ fov: 180
 ray_encoding: 7
 proprio_dim: 2
 
-
 rand_pos: "True"
-init_pos: {"x": 50.0, "y": 50.0}
-goal_pos: {"x": 10.0, "y": 10.0}
-
 
 num_envs: 256
 gamma: 0.99
 goal_radius: 4.0      # distance threshold to count as reaching the goal
+
+completation_rate_eps: 10
+mean_of_means_runs: 10

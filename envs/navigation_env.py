@@ -7,7 +7,7 @@ import imageio.v3 as iio
 from omegaconf import DictConfig
 from .env_utils import RayCast, PerlinColor
 from utils.geometry import (walls_json_to_numpy, compute_starts_and_ends,
-                             w2s, bounding_box, diagonal_length)
+                             w2s, bounding_box, diagonal_length, start_goal_pos_from_json)
 
 WALL_OFFSET = 10
 
@@ -57,9 +57,10 @@ class NavigationEnv(gym.Env):
         self._half_fov_rad = float(np.deg2rad(self.fov / 2.0))
         self.goal_radius  = float(cfg.env.get("goal_radius", 1e-4))
 
+        start_pos, goal_pos = start_goal_pos_from_json(cfg.env.room_path)
+
         self.goal_pos = torch.tensor(
-            [cfg.env.goal_pos["x"], cfg.env.goal_pos["y"]],
-            dtype=torch.float32, device=device,
+            goal_pos, dtype=torch.float32, device=device,
         )
 
         self.color_field = PerlinColor(device=device, seed=cfg.seed)
@@ -90,7 +91,7 @@ class NavigationEnv(gym.Env):
             self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
         else:
             self.initial_pos = torch.tensor(
-                    [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
+                    start_pos,
                     dtype=torch.float32, device=device,
                 )
             
@@ -157,7 +158,7 @@ class NavigationEnv(gym.Env):
         rand_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
 
         self.agent_pos[mask]        = rand_pos[mask] if self.random_pos_flag else self.initial_pos
-        self.facing_direction[mask] = rand_direction[mask] if self.random_pos_flag else torch.pi / 2.0
+        self.facing_direction[mask] = rand_direction[mask]
         self.steps[mask]            = 0
         self.last_speed[mask]       = 0.0
         self.last_turning[mask]     = 0.0

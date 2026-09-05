@@ -15,4 +15,13 @@ warm_start_steps: 1000
 train_freq: 4
 eval_freq: 100
 save_interval: 10
+
+# n_iterations acts as an upper bound; training stops early once
+# the EMA of the eval return plateaus for `patience` consecutive evaluations
+# (evaluations happen every `eval_freq` steps, not every iteration).
+early_stopping:
+  enabled: true
+  patience: 20
+  min_delta: 0.01
+  ema_alpha: 0.1
   

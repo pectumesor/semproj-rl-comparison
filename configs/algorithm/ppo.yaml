@@ -10,12 +10,20 @@ target_kl: null
 max_grad_norm: 0.5
 
 lr: 3e-4
-n_iterations: 100
+n_iterations: 1000
 max_steps: 512
 num_steps: 256
 n_epochs: 2
 save_interval: 10
 mini_batch_size: 128
+
+# n_iterations acts as an upper bound; training stops early once
+# the EMA of the eval return plateaus for `patience` consecutive evaluations.
+early_stopping:
+  enabled: true
+  patience: 20
+  min_delta: 0.01
+  ema_alpha: 0.1
 
 # Recurrent PPO
 num_layers: 2

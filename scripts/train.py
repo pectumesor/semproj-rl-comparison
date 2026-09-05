@@ -13,7 +13,8 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
 
-from utils import create_ppo_agent, save_video, create_buffer, create_algorithm
+from utils import (create_ppo_agent, evaluate_model_on_metrics,
+save_video, create_buffer, create_algorithm)
 from envs import (NavigationEnv, compute_num_rays)
 
 
@@ -23,6 +24,8 @@ import numpy as np
 device = torch.device( "mps" if torch.backends.mps.is_available() 
                       else "cuda" if torch.cuda.is_available()
                       else "cpu" )
+
+device = "cpu"
 
 print(f"My device: {device}")
 
@@ -34,10 +37,15 @@ def main(cfg: DictConfig):
 
     wandb.login()
 
-    with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=OmegaConf.to_container(cfg, resolve=True),
-                    group=cfg.wandb.group, name=f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}_seed_{cfg.seed}",
-                    tags=[f"encoder:{cfg.backbone.name}", cfg.observation.name, f"seed_{cfg.seed}", cfg.algorithm.name],
-                    sync_tensorboard=True, reinit=True):
+    run_config = OmegaConf.to_container(cfg, resolve=True)
+    run_config.update({
+            "architecture_name": f"{cfg.observation.name}_{cfg.backbone.name}"
+        })
+    
+    with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=run_config,
+                        group=cfg.wandb.group, name=f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}_seed_{cfg.seed}",
+                        tags=[f"backbone:{cfg.backbone.name}", f"encoder:{cfg.observation.name}",f"algorithm:{cfg.algorithm.name}"],
+                        sync_tensorboard=True, reinit=True, mode=cfg.wandb.mode):
 
         trial_name = wandb.run.name
         log_dir = ROOT_DIR / "logs" / f"{trial_name}"
@@ -52,9 +60,9 @@ def main(cfg: DictConfig):
                                  ray_dim= ray_dim, cfg=cfg).to(device)
 
         env   = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=ray_dim,
-                                           num_envs=cfg.env.num_envs, device=device).compile()
+                                           num_envs=cfg.env.num_envs, device=device)
         eval_env = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, 
-                                     obs_dim=ray_dim, num_envs=1, device=device).compile()
+                                     obs_dim=ray_dim, num_envs=1, device=device)
 
         buffer = create_buffer(type=cfg.algorithm.name, ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim,
                                device=device, cfg=cfg)
@@ -77,5 +85,14 @@ def main(cfg: DictConfig):
                     f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
                 })
 
+        # Evaluate metrics on a fixed starting and ending goal
+        env.random_pos_flag = False
+        eval_env.random_pos_flag = False
+
+        evaluate_model_on_metrics(agent=agent, env=env, eval_env=eval_env,
+                                        episodes=cfg.env.completion_rate_eps,
+                                        nr_runs=cfg.env.means_of_means_runs, 
+                                        json_path=cfg.env.room_path)
+        
 if __name__ == "__main__":
     main()
