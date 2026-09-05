@@ -24,6 +24,8 @@ class PPOUpdateStats:
     mean_aux_loss: float = 0
     clip_fraction: float = 0
     explained_variance: float = 0
+    max_kl: float = 0
+    kl_break: bool = False
     
 
 class PPO(ABC):
@@ -73,12 +75,15 @@ class MLPPPO(PPO):
 
         # -- Algorithm Configuration --
         self.learning_rate = cfg.algorithm.lr
+        self.base_lr = cfg.algorithm.lr
+        self.anneal_lr = bool(cfg.algorithm.get("anneal_lr", False))
 
         # -- Training Iterations --
         self.n_iterations = cfg.algorithm.n_iterations
         self.mini_batch = cfg.algorithm.mini_batch_size
         self.n_epochs = cfg.algorithm.n_epochs
         self.save_interval = cfg.algorithm.save_interval
+        self.eval_interval = max(1, int(cfg.algorithm.get("eval_interval", 1)))
 
         # -- Early Stopping --
         es_cfg = cfg.algorithm.early_stopping
@@ -222,11 +227,20 @@ class MLPPPO(PPO):
                 new_lr = min(current_lr * 1.5, max_lr)
             return new_lr
 
+    def anneal_learning_rate(self, iteration: int):
+        """Linearly decay the LR from base_lr to 0 over n_iterations."""
+        frac = max(0.0, 1.0 - (iteration - 1) / self.n_iterations)
+        self.learning_rate = frac * self.base_lr
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = self.learning_rate
+
     def update(self):
 
         rollout_batch = self.buffer.get()
 
         mean_kl = 0
+        max_kl = 0.0
+        kl_break = False
         mean_entropy = 0
         mean_surrogate_loss = 0
         mean_val_loss = 0
@@ -258,7 +272,22 @@ class MLPPPO(PPO):
 
             ratio = torch.exp(logp_batch - old_logp_batch)
             kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
+            kl_val = kl.item()
+            max_kl = max(max_kl, kl_val)
+
+            # Hard trust-region guard: bail out of the remaining epochs/minibatches
+            # for this rollout once the *running mean* KL over this update exceeds
+            # 1.5 * target_kl, so a drifting policy can't be destroyed by the tail
+            # end of the epoch loop. Running mean (not per-minibatch KL) is used so
+            # the threshold is on the same scale as the logged "Mean KL-Divergence".
             if self.target_kl is not None:
+                running_mean_kl = (mean_kl + kl_val) / (num_updates + 1)
+                if running_mean_kl > 1.5 * self.target_kl:
+                    kl_break = True
+                    break
+
+            # KL-reactive LR control is mutually exclusive with LR annealing.
+            if self.target_kl is not None and not self.anneal_lr:
                 self.learning_rate = self.adjust_learning_rate(kl, self.learning_rate)
                 for param_group in self.optimizer.param_groups:
                     param_group["lr"] = self.learning_rate
@@ -284,6 +313,7 @@ class MLPPPO(PPO):
             mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1
 
+        num_updates = max(num_updates, 1)
         mean_kl /= num_updates
         mean_surrogate_loss /= num_updates
         mean_val_loss /= num_updates
@@ -301,37 +331,36 @@ class MLPPPO(PPO):
             mean_train_rew=mean_train_rew,
             clip_fraction=mean_clip_fraction,
             explained_variance=explained_variance,
+            max_kl=max_kl,
+            kl_break=kl_break,
         )
 
-    def evaluate_policy(self, num_episodes=50):
+    def evaluate_policy(self):
         if self.eval_env is None:
             return None, None
 
-        returns = []
-        lengths = []
+        # One vectorized pass: eval_env.num_envs episodes run in parallel. Each env
+        # is scored only up to its first termination/truncation (mask `active`);
+        # envs keep stepping afterwards but their contribution is frozen.
+        num_envs = self.eval_env.num_envs
+        returns = torch.zeros(num_envs, device=self.device)
+        lengths = torch.zeros(num_envs, device=self.device)
+        active  = torch.ones(num_envs, dtype=torch.bool, device=self.device)
 
         self.agent.eval()
         with torch.no_grad():
-            for i in range(num_episodes):
-                obs, _ = self.eval_env.reset()
-                done = False
-                episode_return = 0.0
-                episode_length = 0
+            obs, _ = self.eval_env.reset()
 
-                while not done:
-                    action = self.agent.predict_action(obs)
-                    next_obs, reward, terminated, truncated, _ = self.eval_env.step(action)
+            while active.any():
+                action = self.agent.predict_action(obs)
+                obs, reward, terminated, truncated, _ = self.eval_env.step(action)
 
-                    obs = next_obs
-                    episode_return += reward[0].item()
-                    episode_length += 1
-                    done = bool(terminated[0]) or bool(truncated[0])
-
-                returns.append(episode_return)
-                lengths.append(episode_length)
+                returns += reward * active
+                lengths += active
+                active &= ~(terminated | truncated)
 
         self.agent.train()
-        return float(np.mean(returns)), float(np.mean(lengths))
+        return returns.mean().item(), lengths.float().mean().item()
 
     def train(self, trial_name: str, run_dir = None):
 
@@ -341,43 +370,59 @@ class MLPPPO(PPO):
 
         for iter in tqdm(range(self.n_iterations), desc="Training"):
 
+            iteration = iter + 1
+            if self.anneal_lr:
+                self.anneal_learning_rate(iteration)
+
             obs, done = self.collect_rollout(obs, done)
             stats = self.update()
-            mean_eval_return, mean_eval_length = self.evaluate_policy()
-            iteration = iter + 1
 
-            converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
+            eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
+            if eval_due:
+                mean_eval_return, mean_eval_length = self.evaluate_policy()
+                converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
+            else:
+                mean_eval_return, mean_eval_length = None, None
+                converged = False
 
+            eval_return_str = f"{mean_eval_return:.4f}" if mean_eval_return is not None else "n/a"
+            eval_length_str = f"{mean_eval_length:.2f}" if mean_eval_length is not None else "n/a"
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
             f"global_std={self.agent.actor.action_std.mean().item():.4f} "
             f"mean_kl={stats.mean_kl:.4f} "
+            f"max_kl={stats.max_kl:.4f} "
+            f"kl_break={int(stats.kl_break)} "
             f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
             f"mean_value_loss={stats.mean_value_loss:.4f} "
             f"mean_entropy={stats.mean_entropy:.4f} "
             f"mean_train_rew={stats.mean_train_rew:.4f} "
-            f"eval_return={mean_eval_return:.4f} "
-            f"eval_length={mean_eval_length:.2f} "
+            f"eval_return={eval_return_str} "
+            f"eval_length={eval_length_str} "
             )
 
             if wandb.run is not None:
-                wandb.log({
+                log_data = {
                     f"Global Std": self.agent.actor.action_std.mean().item(),
                     f"Mean KL-Divergence": stats.mean_kl,
+                    f"Max KL-Divergence": stats.max_kl,
+                    f"KL Break": int(stats.kl_break),
                     f"Mean Surrogate Loss": stats.mean_surrogate_loss,
                     f"Mean Value Loss": stats.mean_value_loss,
                     f"Mean Entropy": stats.mean_entropy,
                     f"Mean Train Return": stats.mean_train_rew,
-                    f"Mean Eval Return": mean_eval_return,
-                    f"Mean Eval Length": mean_eval_length,
                     f"Learning Rate": self.learning_rate,
                     f"Clip Fraction": stats.clip_fraction,
                     f"Explained Variance": stats.explained_variance,
-                })
+                }
+                if mean_eval_return is not None:
+                    log_data[f"Mean Eval Return"] = mean_eval_return
+                    log_data[f"Mean Eval Length"] = mean_eval_length
+                wandb.log(log_data)
 
             if run_dir is not None:
-                if self.early_stopping_enabled and self.early_stopper.improved:
+                if eval_due and self.early_stopping_enabled and self.early_stopper.improved:
                     self.agent.save_model(run_dir / "best.pt", self.optimizer)
 
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
@@ -395,7 +440,7 @@ class MLPPPO(PPO):
 
                 if wandb.run is not None:
                     wandb.log({
-                        f"Early stopping": iteration / self.n_iterations,
+                        f"Early stopping": iteration,
                         f"Best Eval Return EMA": self.early_stopper.best,
                     })
                 
@@ -478,6 +523,8 @@ class RecurrentPPO(MLPPPO):
         rollout_batch = self.buffer.get()
 
         mean_kl = 0
+        max_kl = 0.0
+        kl_break = False
         mean_entropy = 0
         mean_surrogate_loss = 0
         mean_val_loss = 0
@@ -508,6 +555,17 @@ class RecurrentPPO(MLPPPO):
             )
 
             kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
+            kl_val = kl.item()
+            max_kl = max(max_kl, kl_val)
+
+            # Hard trust-region guard (see MLPPPO.update): stop the epoch loop once
+            # the running-mean KL over this update exceeds 1.5 * target_kl.
+            if self.target_kl is not None:
+                running_mean_kl = (mean_kl + kl_val) / (num_updates + 1)
+                if running_mean_kl > 1.5 * self.target_kl:
+                    kl_break = True
+                    break
+
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
@@ -528,6 +586,7 @@ class RecurrentPPO(MLPPPO):
             mean_train_rew += ret_batch.mean().item()
             num_updates += 1
 
+        num_updates = max(num_updates, 1)
         mean_kl /= num_updates
         mean_surrogate_loss /= num_updates
         mean_val_loss /= num_updates
@@ -541,43 +600,42 @@ class RecurrentPPO(MLPPPO):
             mean_value_loss=mean_val_loss,
             mean_entropy=mean_entropy,
             mean_aux_loss=mean_aux_loss,
-            mean_train_rew=mean_train_rew)
+            mean_train_rew=mean_train_rew,
+            max_kl=max_kl,
+            kl_break=kl_break)
     
-    def evaluate_policy(self, num_episodes=5):
+    def evaluate_policy(self):
         if self.eval_env is None:
             return None, None
 
-        returns = []
-        lengths = []
+        # One vectorized pass: eval_env.num_envs episodes run in parallel, each
+        # scored only up to its first termination/truncation (mask `active`).
+        num_envs = self.eval_env.num_envs
+        returns = torch.zeros(num_envs, device=self.device)
+        lengths = torch.zeros(num_envs, device=self.device)
+        active  = torch.ones(num_envs, dtype=torch.bool, device=self.device)
 
-        # Batch size 1: evaluation runs a single sequential episode
         lstm_state = (
-            torch.zeros((self.num_layers, 1, self.hidden_size), dtype=torch.float, device=self.device),
-            torch.zeros((self.num_layers, 1, self.hidden_size), dtype=torch.float, device=self.device)
+            torch.zeros((self.num_layers, num_envs, self.hidden_size), dtype=torch.float, device=self.device),
+            torch.zeros((self.num_layers, num_envs, self.hidden_size), dtype=torch.float, device=self.device)
         )
 
         self.agent.eval()
         with torch.no_grad():
-            for _ in range(num_episodes):
-                obs, _ = self.eval_env.reset()
-                done = torch.zeros((1,1), dtype=torch.bool, device=self.device)
-                episode_return = 0.0
-                episode_length = 0
+            obs, _ = self.eval_env.reset()
+            done = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
 
-                while not done:
-                    action, lstm_state = self.agent.predict_action(obs, lstm_state, done)
-                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action)
+            while active.any():
+                action, lstm_state = self.agent.predict_action(obs, lstm_state, done)
+                obs, reward, terminated, truncated, info = self.eval_env.step(action)
+                done = terminated | truncated
 
-                    obs = next_obs
-                    episode_return += reward
-                    episode_length += 1
-                    done = torch.tensor([[bool(terminated[0]) or bool(truncated[0])]], dtype=torch.bool, device=self.device)
-
-                returns.append(float(episode_return))
-                lengths.append(int(episode_length))
+                returns += reward * active
+                lengths += active
+                active &= ~done
 
         self.agent.train()
-        return float(np.mean(returns)), float(np.mean(lengths))
+        return returns.mean().item(), lengths.float().mean().item()
 
     def train(self,  trial_name: str, run_dir = None):
 
@@ -600,43 +658,59 @@ class RecurrentPPO(MLPPPO):
 
         for iter in iterations_bar:
 
+            iteration = iter + 1
+            if self.anneal_lr:
+                self.anneal_learning_rate(iteration)
+
             obs, rollout_lstm_state, done = self.collect_rollout(obs, rollout_lstm_state, done)
             stats = self.update(rollout_lstm_state)
-            mean_eval_return, mean_eval_length = self.evaluate_policy()
-            iteration = iter + 1
 
-            converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
+            eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
+            if eval_due:
+                mean_eval_return, mean_eval_length = self.evaluate_policy()
+                converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
+            else:
+                mean_eval_return, mean_eval_length = None, None
+                converged = False
 
+            eval_return_str = f"{mean_eval_return:.4f}" if mean_eval_return is not None else "n/a"
+            eval_length_str = f"{mean_eval_length:.2f}" if mean_eval_length is not None else "n/a"
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
             f"global_std={self.agent.actor.action_std.mean().item():.4f} "
             f"mean_kl={stats.mean_kl:.4f} "
+            f"max_kl={stats.max_kl:.4f} "
+            f"kl_break={int(stats.kl_break)} "
             f"mean_surrogate_loss={stats.mean_surrogate_loss:.4f} "
             f"mean_value_loss={stats.mean_value_loss:.4f} "
             f"mean_entropy={stats.mean_entropy:.4f} "
             f"mean_train_rew={stats.mean_train_rew:.4f} "
-            f"eval_return={mean_eval_return:.4f} "
-            f"eval_length={mean_eval_length:.2f} "
+            f"eval_return={eval_return_str} "
+            f"eval_length={eval_length_str} "
             )
 
             if wandb.run is not None:
-                wandb.log({
+                log_data = {
                     f"Global Std": self.agent.actor.action_std.mean().item(),
                     f"Mean KL-Divergence": stats.mean_kl,
+                    f"Max KL-Divergence": stats.max_kl,
+                    f"KL Break": int(stats.kl_break),
                     f"Mean Surrogate Loss": stats.mean_surrogate_loss,
                     f"Mean Value Loss": stats.mean_value_loss,
                     f"Mean Entropy": stats.mean_entropy,
                     f"Mean Train Return": stats.mean_train_rew,
-                    f"Mean Eval Return": mean_eval_return,
-                    f"Mean Eval Length": mean_eval_length,
                     f"Learning Rate": self.learning_rate,
                     f"Clip Fraction": stats.clip_fraction,
                     f"Explained Variance": stats.explained_variance,
-                })
+                }
+                if mean_eval_return is not None:
+                    log_data[f"Mean Eval Return"] = mean_eval_return
+                    log_data[f"Mean Eval Length"] = mean_eval_length
+                wandb.log(log_data)
 
             if run_dir is not None:
-                if self.early_stopping_enabled and self.early_stopper.improved:
+                if eval_due and self.early_stopping_enabled and self.early_stopper.improved:
                     self.agent.save_model(run_dir / "best.pt", self.optimizer)
 
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
@@ -654,7 +728,7 @@ class RecurrentPPO(MLPPPO):
 
                 if wandb.run is not None:
                     wandb.log({
-                        f"Early stopping": iteration / self.n_iterations,
+                        f"Early stopping": iteration,
                         f"Best Eval Return EMA": self.early_stopper.best,
                     })
                 break

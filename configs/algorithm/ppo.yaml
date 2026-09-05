@@ -1,15 +1,30 @@
 name: ppo
 gae_lambda: 0.95
 clip_epsilon: 0.2
-entropy_coeff: 0.0
+# Small entropy bonus: keeps a floor on exploration so the action std can't
+# collapse to a near-deterministic policy that then gets stuck in a bad region
+# (observed as catastrophic mid-training collapse on some seeds).
+entropy_coeff: 0.005
 val_coeff: 0.5
 aux_coeff: 0.2
 task_coeff: 1.0
 intr_coeff: 0.0
-target_kl: null
+# Hard trust-region guard: once the running-mean KL(old||new) over an update
+# (same quantity as the logged "Mean KL-Divergence") exceeds `1.5 * target_kl`,
+# the rest of the epoch loop for that rollout is skipped, so a drifting policy
+# can't be wrecked by the tail of the update.
+# Calibrated from a healthy converged run (mlp_mlp_ppo_seed_3): steady-state
+# mean KL ~0.02-0.027, worst harmless spike ~0.055. target_kl=0.04 => break at
+# 0.06, just above that spike. Re-check against "Max KL-Divergence" / "KL Break"
+# after a run; tighten toward 0.03 if the good runs stay well under 0.05.
+target_kl: 0.04
 max_grad_norm: 0.5
 
 lr: 3e-4
+# Linearly decay the LR from `lr` to 0 over `n_iterations`. Standard PPO practice:
+# stops full-size updates late in training once the policy has largely converged.
+# When true, the KL-reactive LR adjustment is disabled (the two would fight).
+anneal_lr: true
 n_iterations: 1000
 max_steps: 512
 num_steps: 256
@@ -17,10 +32,27 @@ n_epochs: 2
 save_interval: 10
 mini_batch_size: 128
 
+# evaluate_policy() is expensive (it rolls out num_eval_envs episodes until the
+# slowest one terminates, i.e. up to max_steps env-steps). Only run it every
+# `eval_interval` iterations; the early stopper and best-checkpoint logic run on
+# the same cadence. Set to 1 to evaluate every iteration.
+eval_interval: 5
+
 # n_iterations acts as an upper bound; training stops early once
 # the EMA of the eval return plateaus for `patience` consecutive evaluations
 # AND that EMA has reached `min_converged_value` (so we never stop on an
 # early low-return plateau while the policy is still bad).
+#
+# Three guards against stopping on normal RL variance:
+#   1. Rollout averaging: each check averages the eval return over
+#      env.num_eval_envs (=50) parallel episodes, not a single episode.
+#   2. Patience window: stop only after `patience` consecutive checks with no
+#      improvement.
+#   3. Smoothing: the plateau test runs on an EMA of the per-check scores
+#      (ema_alpha=0.2 => effective window of ~last 9 checks), not the raw score.
+#
+# patience/ema_alpha are counted in evaluations, not iterations: with
+# eval_interval=5, patience=10 means ~50 iterations of no improvement.
 #
 # Reward scale (navigation env): -1/max_steps per step, +1.0 on reaching the
 # goal. So eval_return is -1.0 if the goal is never reached and approaches
@@ -29,14 +61,14 @@ mini_batch_size: 128
 # early stop; lower it (e.g. 0.3-0.5) if that is too strict for a room.
 early_stopping:
   enabled: true
-  patience: 20
+  patience: 10
   min_delta: 0.01
-  ema_alpha: 0.1
-  min_converged_value: 0.9
-  # Also require the (stochastic) training return EMA to have plateaued before
-  # stopping, so a noisy eval-return plateau alone can't end a run that is
-  # still learning. train_min_delta is on the per-step reward scale.
-  track_train_return: true
+  ema_alpha: 0.2
+  min_converged_value: 0.8
+  # Eval return is the only stopping signal. The rollout averaging + patience +
+  # EMA smoothing above are what protect against a premature stop, so the
+  # (stochastic) training-return plateau check is disabled.
+  track_train_return: false
   train_min_delta: 0.002
 
 # Recurrent PPO

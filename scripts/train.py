@@ -61,8 +61,8 @@ def main(cfg: DictConfig):
 
         env   = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=ray_dim,
                                            num_envs=cfg.env.num_envs, device=device)
-        eval_env = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, 
-                                     obs_dim=ray_dim, num_envs=1, device=device)
+        eval_env = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays,
+                                     obs_dim=ray_dim, num_envs=cfg.env.num_eval_envs, device=device)
 
         buffer = create_buffer(type=cfg.algorithm.name, ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim,
                                device=device, cfg=cfg)

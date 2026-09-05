@@ -56,24 +56,34 @@ def extract_trajectory(agent, env, nr_runs):
 def completion_rate(agent, env, episodes):
 
     """
-    Return the episodes completion rate of trained policy in percentage.
-    Expects a single-env (env.num_envs == 1) instance.
+    Return the episode completion rate of the trained policy in percentage.
+    Episodes are rolled out in parallel across env.num_envs; batches repeat until
+    at least `episodes` episodes have been scored (the last batch is trimmed so
+    exactly `episodes` count toward the rate).
     """
 
-    completed_episodes = 0
+    num_envs = env.num_envs
+    completed = 0
+    counted = 0
 
-    for _ in range(episodes):
+    while counted < episodes:
         obs, _ = env.reset()
-        done, trunc = False, False
+        active  = torch.ones(num_envs, dtype=torch.bool, device=env.device)
+        reached = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
 
-        while not done and not trunc:
+        while active.any():
             with torch.no_grad():
                 action = agent.predict_action(obs)
-            obs, _, done, trunc, _ = env.step(action)
+            obs, _, terminated, truncated, _ = env.step(action)
 
-        completed_episodes += bool(done)
+            reached |= terminated & active
+            active  &= ~(terminated | truncated)
 
-    return (completed_episodes / episodes) * 100
+        take = min(num_envs, episodes - counted)
+        completed += int(reached[:take].sum().item())
+        counted += take
+
+    return (completed / episodes) * 100
 
 def _resample_polyline(points: np.ndarray, n_points: int) -> np.ndarray:
     """Resample a polyline to exactly `n_points`, evenly spaced by arc length (endpoints kept)."""

@@ -17,6 +17,7 @@ proprio_dim: 2
 rand_pos: "True"
 
 num_envs: 256
+num_eval_envs: 50     # parallel episodes rolled out per evaluate_policy() call
 gamma: 0.99
 goal_radius: 4.0      # distance threshold to count as reaching the goal
 
