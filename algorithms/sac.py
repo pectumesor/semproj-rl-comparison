@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from models.agents import SACAgent, RecurrentSACAgent
 from models.heads import DoubleQNet
-from .early_stopping import EarlyStopping
+from .early_stopping import ConvergenceMonitor
 
 
 @dataclass
@@ -101,9 +101,7 @@ class MLPSAC(SAC):
         # -- Early Stopping --
         es_cfg = cfg.algorithm.early_stopping
         self.early_stopping_enabled = bool(es_cfg.enabled)
-        self.early_stopper = EarlyStopping(
-            patience=es_cfg.patience, min_delta=es_cfg.min_delta, ema_alpha=es_cfg.ema_alpha,
-        )
+        self.early_stopper = ConvergenceMonitor(es_cfg)
 
 
         # -- Architecture --
@@ -279,7 +277,7 @@ class MLPSAC(SAC):
             if steps >= self.warm_start_steps and steps % self.eval_freq == 0:
                 eval_step += 1
                 mean_returns, mean_episode_lengths = self.evaluate_policy()
-                converged = self.early_stopping_enabled and self.early_stopper.step(mean_returns)
+                converged = self.early_stopper.step(mean_returns, mean_stats.train_rew)
 
                 print(
                 f"[SAC] eval_step={eval_step} "
@@ -293,16 +291,16 @@ class MLPSAC(SAC):
                 f"eval_return={mean_returns:.4f} "
                 f"eval_length={mean_episode_lengths:.2f}"
             )
-                
-            if wandb.run is not None:
+
+                if wandb.run is not None:
                     wandb.log({
-                        "Critic Loss": {mean_stats.critic_loss},
-                        "Actor Loss": {mean_stats.actor_loss},
-                        "Alpha Loss": {mean_stats.alpha_loss},
-                        "Alpha": {mean_stats.alpha},
-                        "Mean Train Return": {mean_stats.train_rew},
-                        "Mean Eval Return": {mean_returns},
-                        "Mean Eval Length": {mean_episode_lengths}
+                        "Critic Loss": mean_stats.critic_loss,
+                        "Actor Loss": mean_stats.actor_loss,
+                        "Alpha Loss": mean_stats.alpha_loss,
+                        "Alpha": mean_stats.alpha,
+                        "Mean Train Return": mean_stats.train_rew,
+                        "Mean Eval Return": mean_returns,
+                        "Mean Eval Length": mean_episode_lengths,
                     })
 
             if run_dir is not None:
@@ -320,14 +318,18 @@ class MLPSAC(SAC):
                     self.agent.save_model(model_path, optimizers)
 
             if converged:
-                print(
+                msg = (
                     f"[SAC] Early stopping at iteration={iter}/{self.n_iterations}: "
                     f"eval return plateaued (best EMA={self.early_stopper.best:.4f})"
                 )
+                if self.early_stopper.train_best is not None:
+                    msg += f", train return plateaued (best EMA={self.early_stopper.train_best:.4f})"
+                print(msg)
 
-                wandb.log({
-                    f"Early stopping": {iter+1}/{self.n_iterations},
-                    f"Best Eval Return EMA": {self.early_stopper.best}
+                if wandb.run is not None:
+                    wandb.log({
+                        f"Early stopping": (iter + 1) / self.n_iterations,
+                        f"Best Eval Return EMA": self.early_stopper.best,
                     })
                 
                 break

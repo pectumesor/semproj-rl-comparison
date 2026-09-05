@@ -37,7 +37,7 @@ cd "${PROJECT_ROOT}"
 python scripts/train.py --multirun \
     hydra/launcher=euler \
     hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
-    hydra.launcher.gpu_per_node=1 \
+    hydra.launcher.gpus_per_node=1 \
     env.room_path="rooms/four_room.json" \
     env.goal_radius=16 \
     env.goal_pos.x=40 \

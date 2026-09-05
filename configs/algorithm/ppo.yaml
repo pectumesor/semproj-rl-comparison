@@ -18,12 +18,26 @@ save_interval: 10
 mini_batch_size: 128
 
 # n_iterations acts as an upper bound; training stops early once
-# the EMA of the eval return plateaus for `patience` consecutive evaluations.
+# the EMA of the eval return plateaus for `patience` consecutive evaluations
+# AND that EMA has reached `min_converged_value` (so we never stop on an
+# early low-return plateau while the policy is still bad).
+#
+# Reward scale (navigation env): -1/max_steps per step, +1.0 on reaching the
+# goal. So eval_return is -1.0 if the goal is never reached and approaches
+# +1.0 the faster the goal is reached. min_converged_value: 0.9 requires the
+# policy to reach the goal within ~50 steps on average before we allow an
+# early stop; lower it (e.g. 0.3-0.5) if that is too strict for a room.
 early_stopping:
   enabled: true
   patience: 20
   min_delta: 0.01
   ema_alpha: 0.1
+  min_converged_value: 0.9
+  # Also require the (stochastic) training return EMA to have plateaued before
+  # stopping, so a noisy eval-return plateau alone can't end a run that is
+  # still learning. train_min_delta is on the per-step reward scale.
+  track_train_return: true
+  train_min_delta: 0.002
 
 # Recurrent PPO
 num_layers: 2
