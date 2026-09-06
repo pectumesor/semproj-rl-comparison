@@ -79,26 +79,20 @@ class NavigationEnv(gym.Env):
         wall_ends   = torch.tensor(we_np, dtype=torch.float32, device=device)
         self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays, max_range).to(device)
       
-        # Mutable state
         self.agent_pos = torch.zeros(self.num_envs, 2, dtype=torch.float32, device=self.device)
-        if self.random_pos_flag:
-            x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
+        
+        x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
                                                                                 self.bounding_box[1] - WALL_OFFSET)
-            y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
+        y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
                                                                                 self.bounding_box[3] - WALL_OFFSET)
-            rand_pos = torch.stack([x,y], dim=-1)
-            self.agent_pos        = rand_pos
-            self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
-        else:
-            self.initial_pos = torch.tensor(
+        rand_pos = torch.stack([x,y], dim=-1)
+        self.agent_pos        = rand_pos
+        self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
+        
+        self.initial_pos = torch.tensor(
                     start_pos,
                     dtype=torch.float32, device=device,
                 )
-            
-            self.facing_direction = torch.full(
-                (self.num_envs,), torch.pi / 2.0, dtype=torch.float32, device=device,
-            )
-
 
         self.steps            = torch.zeros(num_envs,    dtype=torch.long,    device=device)
         self.prev_dist        = torch.zeros(num_envs,    dtype=torch.float32, device=device)

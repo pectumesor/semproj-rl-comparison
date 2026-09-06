@@ -31,6 +31,7 @@ def extract_trajectory(agent, env, nr_runs):
 
     trajectories = []
     while len(trajectories) < nr_runs:
+        print("Extracting trajectories...")
         with torch.no_grad():
             action = agent.predict_action(obs)
         obs, _, terminated, truncated, info = env.step(action)

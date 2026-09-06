@@ -21,5 +21,5 @@ num_eval_envs: 50     # parallel episodes rolled out per evaluate_policy() call
 gamma: 0.99
 goal_radius: 4.0      # distance threshold to count as reaching the goal
 
-completation_rate_eps: 10
+completion_rate_eps: 10
 mean_of_means_runs: 10

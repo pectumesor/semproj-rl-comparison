@@ -81,9 +81,9 @@ def main(cfg: DictConfig):
         custom_video_path = run_dir / "videos" / f"{trial_name}.mp4"
         save_video(frames, custom_video_path)
 
-        wandb.log({
-                    f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
-                })
+        #wandb.log({
+        #            f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
+        #        })
 
         # Evaluate metrics on a fixed starting and ending goal
         env.random_pos_flag = False
@@ -91,7 +91,7 @@ def main(cfg: DictConfig):
 
         evaluate_model_on_metrics(agent=agent, env=env, eval_env=eval_env,
                                         episodes=cfg.env.completion_rate_eps,
-                                        nr_runs=cfg.env.means_of_means_runs, 
+                                        nr_runs=cfg.env.mean_of_means_runs,
                                         json_path=cfg.env.room_path)
         
 if __name__ == "__main__":
