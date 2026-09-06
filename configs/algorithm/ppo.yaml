@@ -4,11 +4,11 @@ clip_epsilon: 0.2
 # Small entropy bonus: keeps a floor on exploration so the action std can't
 # collapse to a near-deterministic policy that then gets stuck in a bad region
 # (observed as catastrophic mid-training collapse on some seeds).
-# NOTE: 0.005 was too strong for this 2-D action space - it pinned the learnable
-# log_std at its clamp ceiling (Mean Entropy flat at 4.838 == exp(LOG_STD_MAX=1)
-# on both dims), which also artificially suppressed KL and the surrogate loss.
-# 0.001 is a gentler nudge; drop to 0 if log_std still saturates.
-entropy_coeff: 0.001
+# The earlier "0.005 pins log_std at the ceiling" symptom was a bug in
+# compute_entropy_loss (summed over the batch instead of averaging, so the term
+# was ~mini_batch_size x too large). With that fixed, 0.005 is a normal value.
+# Watch "Global Std": it should settle around 0.1-0.6, not sit at exp(1)=2.72.
+entropy_coeff: 0.005
 val_coeff: 0.5
 aux_coeff: 0.2
 task_coeff: 1.0

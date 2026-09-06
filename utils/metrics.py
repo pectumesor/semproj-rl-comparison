@@ -149,6 +149,15 @@ def evaluate_model_on_metrics(agent, env, eval_env, episodes, nr_runs, json_path
 
     reference_trajectory = generate_reference_trajectory(json_path, start, end)
 
+    # These metrics are computed after training, so the wandb auto-step is
+    # wherever each run's training loop left off (different per seed) -- which
+    # makes the panels misaligned across seeds. Log them against their own
+    # `metrics_run` index (0..nr_runs-1) so every seed lands on the same x.
+    if wandb.run is not None:
+        wandb.define_metric("metrics_run")
+        for name in ("Completion Rate", "Dynamic Time Warping", "Normalized Path Length"):
+            wandb.define_metric(name, step_metric="metrics_run")
+
     # For Means of Means increase the nr_runs to > 1
     trajectory = extract_trajectory(agent, env, nr_runs)
     for i in tqdm(range(nr_runs), desc="Evaluating policy on metrics"):
@@ -159,6 +168,7 @@ def evaluate_model_on_metrics(agent, env, eval_env, episodes, nr_runs, json_path
         npl_value = normalized_path_length(trajectory[i], reference_trajectory)
 
         wandb.log({
+            "metrics_run": i,
             "Completion Rate": cr_value,
             "Dynamic Time Warping": dtw_value,
             "Normalized Path Length": npl_value

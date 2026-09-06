@@ -202,7 +202,11 @@ class MLPPPO(PPO):
         return torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
     def compute_entropy_loss(self, entropy_batch):
-        return -torch.sum(entropy_batch, dim=-1).mean()
+        # entropy_batch is already the per-sample entropy summed over action dims
+        # (shape (B,)). Average over the batch — do NOT sum, or the term scales
+        # with mini_batch_size and dwarfs the surrogate/value losses (which pins
+        # log_std at its clamp ceiling).
+        return -entropy_batch.mean()
 
     def compute_aux_loss(self):
         # TODO: See what kind of inputs each auxiliary task needs to compute the loss
