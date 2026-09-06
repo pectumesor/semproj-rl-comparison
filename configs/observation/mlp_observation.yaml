@@ -1,2 +1,7 @@
+defaults:
+  - _self_
+  - frame_stack: base
+  - grid_cell: base
+
 name: mlp
 obs_embed_hidden_sizes: [64, 64]

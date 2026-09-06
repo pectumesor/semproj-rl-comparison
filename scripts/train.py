@@ -37,14 +37,24 @@ def main(cfg: DictConfig):
 
     wandb.login()
 
+    frame_stack = cfg.observation.frame_stack.enabled
+    grid_cell = cfg.observation.grid_cell.enabled
+    auxiliary_head = cfg.head.auxiliary_head.enabled
+
     run_config = OmegaConf.to_container(cfg, resolve=True)
     run_config.update({
-            "architecture_name": f"{cfg.observation.name}_{cfg.backbone.name}"
+            "architecture_name": (
+                f"encoder:{cfg.observation.name}_backbone:{cfg.backbone.name}_"
+                f"frame_stack:{frame_stack}_grid_cell:{grid_cell}_"
+                f"auxiliary_head:{auxiliary_head}"
+            )
         })
-    
+
     with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=run_config,
                         group=cfg.wandb.group, name=f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}_seed_{cfg.seed}",
-                        tags=[f"backbone:{cfg.backbone.name}", f"encoder:{cfg.observation.name}",f"algorithm:{cfg.algorithm.name}"],
+                        tags=[f"backbone:{cfg.backbone.name}", f"encoder:{cfg.observation.name}",f"algorithm:{cfg.algorithm.name}",
+                              f"frame_stack:{frame_stack}", f"grid_cell:{grid_cell}",
+                              f"auxiliary_head:{auxiliary_head}"],
                         sync_tensorboard=True, reinit=True, mode=cfg.wandb.mode):
 
         trial_name = wandb.run.name
@@ -81,9 +91,9 @@ def main(cfg: DictConfig):
         custom_video_path = run_dir / "videos" / f"{trial_name}.mp4"
         save_video(frames, custom_video_path)
 
-        #wandb.log({
-        #            f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
-        #        })
+        wandb.log({
+                    f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
+                })
 
         # Evaluate metrics on a fixed starting and ending goal
         env.random_pos_flag = False
