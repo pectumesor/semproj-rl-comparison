@@ -97,12 +97,12 @@ def main(cfg: DictConfig):
 
         # Evaluate metrics on a fixed starting and ending goal
         env.random_pos_flag = False
-        eval_env.random_pos_flag = False
 
-        evaluate_model_on_metrics(agent=agent, env=env, eval_env=eval_env,
+        evaluate_model_on_metrics(agent=agent, env=env,
                                         episodes=cfg.env.completion_rate_eps,
                                         nr_runs=cfg.env.mean_of_means_runs,
-                                        json_path=cfg.env.room_path)
+                                        json_path=cfg.env.room_path,
+                                        backbone_type=cfg.backbone.name)
         
 if __name__ == "__main__":
     main()

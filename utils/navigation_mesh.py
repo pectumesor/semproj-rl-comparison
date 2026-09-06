@@ -65,10 +65,15 @@ def extract_vertices_and_segments(json_path: str):
         v = get_index(edge["to"])
         segments.append([u, v])
 
+
+    start_pos = [data["start_pos"]["x"], data["start_pos"]["y"]]
+    end_pos = [data["goal_pos"]["x"], data["goal_pos"]["y"]]
+
     return dict(
         vertices=np.array(vertices, dtype=np.float64),
         segments=np.array(segments, dtype=np.int32),
-    )
+    ), start_pos, end_pos
+
 
 def is_wall_segment(u, v, segments):
     """Check whether (u, v) appears, in either direction, as a row of `segments`."""
@@ -274,9 +279,9 @@ def funnel_algorithm(centroid_path, triangle_path, triangulation, start, end):
 
    return string_pull(portals_left, portals_right)
 
-def generate_reference_trajectory(json_path: str, start, end):
+def generate_reference_trajectory(json_path: str):
 
-    room = extract_vertices_and_segments(json_path)
+    room, start, end = extract_vertices_and_segments(json_path)
 
     t = tr.triangulate(room, 'pn')
 
@@ -309,9 +314,9 @@ def log_room_and_path(triangulation, room,
         })
     plt.close("all")
 
-def test_triangulation(json_path: str, start, end):
+def test_triangulation(json_path: str):
 
-    room = extract_vertices_and_segments(json_path)
+    room, start, end = extract_vertices_and_segments(json_path)
 
     t = tr.triangulate(room, 'pn')
     print(t)
@@ -337,6 +342,6 @@ def test_triangulation(json_path: str, start, end):
     
 
 if __name__ == "__main__":
-    test_triangulation("rooms/four_room.json")
+    test_triangulation("rooms/cross_room.json")
 
     

@@ -9,11 +9,6 @@ Script with metric function to test the performance of trained policies
 
 """
 
-def _to_xy(t: torch.Tensor) -> np.ndarray:
-    """(1, 2) or (2,) device tensor -> detached, copied (2,) numpy point."""
-    return t.detach().reshape(-1).cpu().numpy().copy()
-
-
 def extract_trajectory_recurrent(agent, env, nr_runs):
 
     num_layers = agent.backbone_model.lstm.num_layers
@@ -26,8 +21,11 @@ def extract_trajectory_recurrent(agent, env, nr_runs):
                     torch.zeros((num_layers, env.num_envs, hidden_size),
                                  dtype=torch.float, device=env.device)
                     )
-    terminated = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-    
+    # Episode-start flag fed to the LSTM on the *next* step: True for an env that
+    # was just reset (terminated *or* truncated), so SimpleLSTM.forward zeroes its
+    # hidden state instead of leaking it into the fresh episode.
+    done = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
     max_len = env.max_steps + 1
     env_ids  = torch.arange(env.num_envs, device=env.device)
     step_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
@@ -38,21 +36,21 @@ def extract_trajectory_recurrent(agent, env, nr_runs):
     while len(trajectories) < nr_runs:
         print("Extracting trajectories...")
         with torch.no_grad():
-            action, lstm_state = agent.predict_action(obs, lstm_state, terminated)
+            action, lstm_state = agent.predict_action(obs, lstm_state, done)
         obs, _, terminated, truncated, info = env.step(action)
+        done = terminated | truncated
 
         step_idx += 1
         buffer[env_ids, step_idx] = info["agent_pos"]
 
-        reset_mask = terminated | truncated
-        if reset_mask.any():
+        if done.any():
             term_ids = terminated.nonzero(as_tuple=True)[0]
             buffer[term_ids, step_idx[term_ids]] = env.goal_pos
             for i in term_ids.tolist():
                 trajectories.append(buffer[i, :step_idx[i] + 1].cpu().numpy().copy())
 
-            reset_ids = reset_mask.nonzero(as_tuple=True)[0]
-            obs, info = env.reset(done=reset_mask)
+            reset_ids = done.nonzero(as_tuple=True)[0]
+            obs, info = env.reset(done=done)
             buffer[reset_ids]    = 0.0
             buffer[reset_ids, 0] = info["agent_pos"][reset_ids]
             step_idx[reset_ids]  = 0
@@ -109,26 +107,28 @@ def completion_rate_recurrent(agent, env, episodes):
     completed = 0
     counted = 0
 
-    lstm_state = (
-                    torch.zeros((num_layers, num_envs, hidden_size),
-                                        dtype=torch.float, device=env.device),
-                    torch.zeros((num_layers, num_envs, hidden_size),
-                                         dtype=torch.float, device=env.device)
-                )
-    terminated = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
-
     while counted < episodes:
         obs, _ = env.reset()
+        # Fresh hidden state per batch — a new set of episodes must not inherit
+        # the LSTM state left over from the previous batch's final step.
+        lstm_state = (
+                        torch.zeros((num_layers, num_envs, hidden_size),
+                                            dtype=torch.float, device=env.device),
+                        torch.zeros((num_layers, num_envs, hidden_size),
+                                             dtype=torch.float, device=env.device)
+                    )
+        done    = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
         active  = torch.ones(num_envs, dtype=torch.bool, device=env.device)
         reached = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
 
         while active.any():
             with torch.no_grad():
-                action, lstm_state = agent.predict_action(obs, lstm_state, terminated)
+                action, lstm_state = agent.predict_action(obs, lstm_state, done)
             obs, _, terminated, truncated, _ = env.step(action)
+            done = terminated | truncated
 
             reached |= terminated & active
-            active  &= ~(terminated | truncated)
+            active  &= ~done
 
         take = min(num_envs, episodes - counted)
         completed += int(reached[:take].sum().item())
@@ -222,16 +222,12 @@ def normalized_path_length(test_trajectory, reference_trajectory):
     return -1 if len(test_trajectory) == 0 else path_length(test_trajectory) / path_length(reference_trajectory)
 
 
-def evaluate_model_on_metrics(agent, env, eval_env, episodes, nr_runs, json_path, backbone_type):
-
-    _, data = env.reset()
-
-    start = _to_xy(data["agent_pos"][0])
-    end = _to_xy(env.goal_pos)
+def evaluate_model_on_metrics(agent, env, episodes,
+                               nr_runs, json_path, backbone_type):
 
     wandb.run.define_metric("metrics/*", step_metric="metrics/step")
 
-    reference_trajectory = generate_reference_trajectory(json_path, start, end)
+    reference_trajectory = generate_reference_trajectory(json_path)
 
     # For Means of Means increase the nr_runs to > 1
     if backbone_type == "mlp":

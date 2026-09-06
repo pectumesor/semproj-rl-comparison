@@ -63,11 +63,18 @@ class RecurrentPPOAgent(RecurrentAgent):
         self.action_low = action_low
         self.action_high = action_high
 
-    def select_action(self, obs: torch.Tensor, 
+    def select_action(self, obs: torch.Tensor,
                       lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
         with torch.no_grad():
             action, action_log_prob, action_mu, action_std, value, lstm_state = super().select_action(obs, lstm_state, done)
             action_clipped = action.clamp(min=self.action_low, max=self.action_high)
-       
+
         return action, action_clipped, action_log_prob, action_mu, action_std, value, lstm_state
+
+    def predict_action(self, obs: torch.Tensor,
+                       lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
+        # Mirror PPOAgent.predict_action: the deterministic (mean) action is
+        # clamped to the env's action bounds so recurrent eval matches the MLP path.
+        action, new_lstm_state = super().predict_action(obs, lstm_state, done)
+        return action.clamp(min=self.action_low, max=self.action_high), new_lstm_state
 

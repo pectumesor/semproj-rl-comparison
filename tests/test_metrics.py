@@ -71,8 +71,11 @@ def main(cfg: DictConfig):
         agent.load_model(run_dir / f"iter_{cfg.algorithm.n_iterations}.pt", device, algorithm.optimizer)
         agent.eval()
 
-        evaluate_model_on_metrics(agent=agent, env=env, eval_env=eval_env, episodes=10,
-                                  nr_runs=10, json_path=cfg.env.room_path)
+        # Evaluate metrics on a fixed starting and ending goal
+        env.random_pos_flag = False
+
+        evaluate_model_on_metrics(agent=agent, env=env, episodes=10,
+                                  nr_runs=10, json_path=cfg.env.room_path, backbone_type=cfg.backbone.name)
 
 if __name__ == "__main__":
     main()
