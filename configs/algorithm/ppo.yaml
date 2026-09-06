@@ -4,19 +4,21 @@ clip_epsilon: 0.2
 # Small entropy bonus: keeps a floor on exploration so the action std can't
 # collapse to a near-deterministic policy that then gets stuck in a bad region
 # (observed as catastrophic mid-training collapse on some seeds).
-entropy_coeff: 0.005
+# NOTE: 0.005 was too strong for this 2-D action space - it pinned the learnable
+# log_std at its clamp ceiling (Mean Entropy flat at 4.838 == exp(LOG_STD_MAX=1)
+# on both dims), which also artificially suppressed KL and the surrogate loss.
+# 0.001 is a gentler nudge; drop to 0 if log_std still saturates.
+entropy_coeff: 0.001
 val_coeff: 0.5
 aux_coeff: 0.2
 task_coeff: 1.0
 intr_coeff: 0.0
-# Hard trust-region guard: once the running-mean KL(old||new) over an update
-# (same quantity as the logged "Mean KL-Divergence") exceeds `1.5 * target_kl`,
+# Hard trust-region guard: once the running-mean KL(old||new) over an update exceeds `1.5 * target_kl`,
 # the rest of the epoch loop for that rollout is skipped, so a drifting policy
 # can't be wrecked by the tail of the update.
-# Calibrated from a healthy converged run (mlp_mlp_ppo_seed_3): steady-state
-# mean KL ~0.02-0.027, worst harmless spike ~0.055. target_kl=0.04 => break at
-# 0.06, just above that spike. Re-check against "Max KL-Divergence" / "KL Break"
-# after a run; tighten toward 0.03 if the good runs stay well under 0.05.
+# Do NOT tighten this off the current logs: the 5-seed rerun's low mean KL (~0.01)
+# and max KL (~0.02-0.04) are deflated by the log_std saturation (see entropy_coeff).
+# Fix the std, rerun, then expect target_kl to settle around 0.02-0.03.
 target_kl: 0.04
 max_grad_norm: 0.5
 
@@ -29,8 +31,8 @@ n_iterations: 1000
 max_steps: 512
 num_steps: 256
 n_epochs: 2
-save_interval: 10
-mini_batch_size: 128
+save_interval: 100
+mini_batch_size: 256
 
 # evaluate_policy() is expensive (it rolls out num_eval_envs episodes until the
 # slowest one terminates, i.e. up to max_steps env-steps). Only run it every
@@ -61,7 +63,7 @@ eval_interval: 5
 # early stop; lower it (e.g. 0.3-0.5) if that is too strict for a room.
 early_stopping:
   enabled: true
-  patience: 10
+  patience: 5
   min_delta: 0.01
   ema_alpha: 0.2
   min_converged_value: 0.8

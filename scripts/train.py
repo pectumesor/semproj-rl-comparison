@@ -72,7 +72,7 @@ def main(cfg: DictConfig):
 
         algorithm.train(trial_name=trial_name, run_dir=run_dir)
         
-        agent.load_model(run_dir / f"iter_{cfg.algorithm.n_iterations}.pt", device, algorithm.optimizer)
+        agent.load_model(run_dir / f"best.pt", device, algorithm.optimizer)
         agent.eval()
 
         # --- Custom PPO rollout + video ---
