@@ -13,7 +13,53 @@ def _to_xy(t: torch.Tensor) -> np.ndarray:
     """(1, 2) or (2,) device tensor -> detached, copied (2,) numpy point."""
     return t.detach().reshape(-1).cpu().numpy().copy()
 
-def extract_trajectory(agent, env, nr_runs):
+
+def extract_trajectory_recurrent(agent, env, nr_runs):
+
+    num_layers = agent.backbone_model.lstm.num_layers
+    hidden_size = agent.backbone_model.lstm.hidden_size
+
+    obs, info = env.reset()
+    lstm_state = (
+                    torch.zeros((num_layers, env.num_envs, hidden_size),
+                                dtype=torch.float, device=env.device),
+                    torch.zeros((num_layers, env.num_envs, hidden_size),
+                                 dtype=torch.float, device=env.device)
+                    )
+    terminated = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    
+    max_len = env.max_steps + 1
+    env_ids  = torch.arange(env.num_envs, device=env.device)
+    step_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    buffer   = torch.zeros(env.num_envs, max_len, 2, device=env.device)
+    buffer[:, 0] = info["agent_pos"]
+
+    trajectories = []
+    while len(trajectories) < nr_runs:
+        print("Extracting trajectories...")
+        with torch.no_grad():
+            action, lstm_state = agent.predict_action(obs, lstm_state, terminated)
+        obs, _, terminated, truncated, info = env.step(action)
+
+        step_idx += 1
+        buffer[env_ids, step_idx] = info["agent_pos"]
+
+        reset_mask = terminated | truncated
+        if reset_mask.any():
+            term_ids = terminated.nonzero(as_tuple=True)[0]
+            buffer[term_ids, step_idx[term_ids]] = env.goal_pos
+            for i in term_ids.tolist():
+                trajectories.append(buffer[i, :step_idx[i] + 1].cpu().numpy().copy())
+
+            reset_ids = reset_mask.nonzero(as_tuple=True)[0]
+            obs, info = env.reset(done=reset_mask)
+            buffer[reset_ids]    = 0.0
+            buffer[reset_ids, 0] = info["agent_pos"][reset_ids]
+            step_idx[reset_ids]  = 0
+
+    return trajectories[:nr_runs]
+
+def extract_trajectory_mlp(agent, env, nr_runs):
 
     """
      Unroll the agent (vectorized across env.num_envs parallel envs) until
@@ -54,7 +100,43 @@ def extract_trajectory(agent, env, nr_runs):
 
     return trajectories[:nr_runs]
 
-def completion_rate(agent, env, episodes):
+def completion_rate_recurrent(agent, env, episodes):
+
+
+    num_layers = agent.backbone_model.lstm.num_layers
+    hidden_size = agent.backbone_model.lstm.hidden_size
+    num_envs = env.num_envs
+    completed = 0
+    counted = 0
+
+    lstm_state = (
+                    torch.zeros((num_layers, num_envs, hidden_size),
+                                        dtype=torch.float, device=env.device),
+                    torch.zeros((num_layers, num_envs, hidden_size),
+                                         dtype=torch.float, device=env.device)
+                )
+    terminated = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
+
+    while counted < episodes:
+        obs, _ = env.reset()
+        active  = torch.ones(num_envs, dtype=torch.bool, device=env.device)
+        reached = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
+
+        while active.any():
+            with torch.no_grad():
+                action, lstm_state = agent.predict_action(obs, lstm_state, terminated)
+            obs, _, terminated, truncated, _ = env.step(action)
+
+            reached |= terminated & active
+            active  &= ~(terminated | truncated)
+
+        take = min(num_envs, episodes - counted)
+        completed += int(reached[:take].sum().item())
+        counted += take
+
+    return (completed / episodes) * 100
+
+def completion_rate_mlp(agent, env, episodes):
 
     """
     Return the episode completion rate of the trained policy in percentage.
@@ -140,7 +222,7 @@ def normalized_path_length(test_trajectory, reference_trajectory):
     return -1 if len(test_trajectory) == 0 else path_length(test_trajectory) / path_length(reference_trajectory)
 
 
-def evaluate_model_on_metrics(agent, env, eval_env, episodes, nr_runs, json_path):
+def evaluate_model_on_metrics(agent, env, eval_env, episodes, nr_runs, json_path, backbone_type):
 
     _, data = env.reset()
 
@@ -152,9 +234,16 @@ def evaluate_model_on_metrics(agent, env, eval_env, episodes, nr_runs, json_path
     reference_trajectory = generate_reference_trajectory(json_path, start, end)
 
     # For Means of Means increase the nr_runs to > 1
-    trajectory = extract_trajectory(agent, env, nr_runs)
+    if backbone_type == "mlp":
+        trajectory = extract_trajectory_mlp(agent, env, nr_runs)
+        cr = completion_rate_mlp
+    else:
+        trajectory = extract_trajectory_recurrent(agent, env, nr_runs)
+        cr = completion_rate_recurrent
+    
+
     for i in tqdm(range(nr_runs), desc="Evaluating policy on metrics"):
-        cr_value = completion_rate(agent, eval_env, episodes)
+        cr_value = cr(agent, env, episodes)
         # Score DTW and NPL on the *same* goal-reaching rollout.
         dtw_value = dynamic_time_warping(trajectory[i], reference_trajectory)
         npl_value = normalized_path_length(trajectory[i], reference_trajectory)
