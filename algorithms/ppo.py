@@ -458,7 +458,7 @@ class RecurrentPPO(MLPPPO):
         self.hidden_size = hidden_size
         if self.buffer.num_envs % num_minibatches != 0:
             raise ValueError(
-                f"For RecurrentPPO, it must hold that num_evs % num_minibatches == 0 "
+                f"For RecurrentPPO, it must hold that num_envs % num_minibatches == 0 "
                 f"Current num_envs: {self.buffer.num_envs}, num_minibatches: {num_minibatches}"
             )
         else:
@@ -473,13 +473,15 @@ class RecurrentPPO(MLPPPO):
                 obs["rays"][done]    = new_obs["rays"][done]
                 obs["proprio"][done] = new_obs["proprio"][done]
 
+                episode_start = done
+
                 (action, action_clipped,
                     action_log_prob, action_mu, action_std,
-                    value, lstm_state) = self.agent.select_action(obs, lstm_state, done)
+                    value, lstm_state) = self.agent.select_action(obs, lstm_state, episode_start)
                 next_obs, reward, terminated, truncated, info = self.env.step(action_clipped)
                 done = terminated | truncated
 
-                bootstrap_val = self.agent.get_value(next_obs, lstm_state, done)
+                bootstrap_val = self.agent.get_value(next_obs, lstm_state, torch.zeros_like(done))
                 reward += self.gamma * bootstrap_val * truncated.float()
 
                 self.buffer.store(
@@ -489,13 +491,14 @@ class RecurrentPPO(MLPPPO):
                     mu=action_mu,
                     std=action_std,
                     val=value,
-                    done=terminated,
+                    done=done,
+                    episode_start=episode_start,
                     rew=reward
                 )
 
                 obs = next_obs
 
-            last_val = self.agent.get_value(obs, lstm_state, done)
+            last_val = self.agent.get_value(obs, lstm_state, torch.zeros_like(done))
             self.buffer.compute_returns(last_val)
 
         return obs, lstm_state, done
@@ -519,7 +522,8 @@ class RecurrentPPO(MLPPPO):
                     val=mini_batch.val[:, mini_batch_envs_ids],
                     ret=mini_batch.ret[:, mini_batch_envs_ids],
                     adv=mini_batch.adv[:, mini_batch_envs_ids],
-                    done=mini_batch.done[:, mini_batch_envs_ids]
+                    done=mini_batch.done[:, mini_batch_envs_ids],
+                    episode_start=mini_batch.episode_start[:, mini_batch_envs_ids]
                 ), mini_batch_envs_ids)
 
     def update(self, initial_lstm_state: Tuple[torch.Tensor, torch.Tensor]):
@@ -533,13 +537,19 @@ class RecurrentPPO(MLPPPO):
         mean_surrogate_loss = 0
         mean_val_loss = 0
         mean_aux_loss = 0
-        num_updates = 0
         mean_train_rew = 0
+        mean_clip_fraction = 0
+        num_updates = 0
+
+        flat_ret = rollout_batch.ret.reshape(-1)
+        flat_val = rollout_batch.val.reshape(-1)
+        var_returns = flat_ret.var()
+        explained_variance = (1 - (flat_ret - flat_val).var() / (var_returns + 1e-8)).item()
 
         for mini_batch, mini_batch_env_ids in self.sample_mini_batch(rollout_batch):
 
             obs_batch = {"rays": mini_batch.rays, "proprio": mini_batch.proprio}
-            done_batch = mini_batch.done
+            episode_start_batch = mini_batch.episode_start
 
             act_batch = mini_batch.act.reshape(-1, *mini_batch.act.shape[2:])
             old_logp_batch = mini_batch.logp.reshape(-1)
@@ -555,8 +565,12 @@ class RecurrentPPO(MLPPPO):
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.agent.evaluate_actions(
                 obs_batch,
                 (initial_lstm_state[0][:, mini_batch_env_ids], initial_lstm_state[1][:, mini_batch_env_ids]),
-                done_batch, act_batch
+                episode_start_batch, act_batch
             )
+
+            ratio = torch.exp(logp_batch - old_logp_batch)
+            if num_updates == 0 and abs(ratio.mean().item() - 1.0) > 0.05:
+                print(f"[RecurrentPPO] first-minibatch ratio={ratio.mean().item():.4f} (expected ~1.0), BPTT replay is inconsistent with collection")
 
             kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
             kl_val = kl.item()
@@ -579,7 +593,7 @@ class RecurrentPPO(MLPPPO):
 
             self.optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=0.5)
+            nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=self.max_grad_norm)
             self.optimizer.step()
 
             mean_kl += kl.item()
@@ -588,6 +602,7 @@ class RecurrentPPO(MLPPPO):
             mean_entropy += entropy_batch.mean().item()
             mean_aux_loss += intr_loss.item()
             mean_train_rew += ret_batch.mean().item()
+            mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1
 
         num_updates = max(num_updates, 1)
@@ -597,6 +612,7 @@ class RecurrentPPO(MLPPPO):
         mean_entropy /= num_updates
         mean_aux_loss /= num_updates
         mean_train_rew /= num_updates
+        mean_clip_fraction /= num_updates
 
         return PPOUpdateStats(
             mean_kl=mean_kl,
@@ -605,6 +621,8 @@ class RecurrentPPO(MLPPPO):
             mean_entropy=mean_entropy,
             mean_aux_loss=mean_aux_loss,
             mean_train_rew=mean_train_rew,
+            clip_fraction=mean_clip_fraction,
+            explained_variance=explained_variance,
             max_kl=max_kl,
             kl_break=kl_break)
     
@@ -647,14 +665,12 @@ class RecurrentPPO(MLPPPO):
         obs, _ = self.env.reset()
         done = torch.zeros(self.buffer.num_envs, dtype=torch.bool, device=self.device)
 
-        initial_lstm_state = (
+        rollout_lstm_state = (
             torch.zeros((self.num_layers, self.buffer.num_envs, self.hidden_size),
                         dtype=torch.float, device=self.device),
             torch.zeros((self.num_layers, self.buffer.num_envs, self.hidden_size),
                          dtype=torch.float, device=self.device)
         )
-
-        rollout_lstm_state = initial_lstm_state
 
         iterations_bar = tqdm(iterable=range(self.n_iterations), total=self.n_iterations,
                               desc="Training PPO")
@@ -666,8 +682,9 @@ class RecurrentPPO(MLPPPO):
             if self.anneal_lr:
                 self.anneal_learning_rate(iteration)
 
+            initial_lstm_state = (rollout_lstm_state[0].clone(), rollout_lstm_state[1].clone())
             obs, rollout_lstm_state, done = self.collect_rollout(obs, rollout_lstm_state, done)
-            stats = self.update(rollout_lstm_state)
+            stats = self.update(initial_lstm_state)
 
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:

@@ -14,6 +14,7 @@ class RolloutBatch:
     ret:     torch.Tensor
     adv:     torch.Tensor
     done:    torch.Tensor
+    episode_start: torch.Tensor = None
 
 
 class RolloutBuffer:
@@ -44,10 +45,11 @@ class RolloutBuffer:
         self.rew_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
         self.ret_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
         self.adv_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.ep_start_buf = torch.zeros((self.num_steps, self.num_envs),                 dtype=torch.bool,  device=device)
 
-       
 
-    def store(self, obs: dict, act, logp, mu, std, val, rew, done):
+
+    def store(self, obs: dict, act, logp, mu, std, val, rew, done, episode_start=None):
         if self.ptr >= self.num_steps:
             raise ValueError("RolloutBuffer is full. Call get() first")
 
@@ -60,6 +62,8 @@ class RolloutBuffer:
         self.val_buf[self.ptr]     = val
         self.rew_buf[self.ptr]     = rew
         self.done_buf[self.ptr]    = done
+        if episode_start is not None:
+            self.ep_start_buf[self.ptr] = episode_start
         self.ptr += 1
 
     def compute_returns(self, last_val):
@@ -91,6 +95,7 @@ class RolloutBuffer:
             ret=self.ret_buf,
             adv=self.adv_buf,
             done=self.done_buf,
+            episode_start=self.ep_start_buf,
         )
         self.ptr = 0
         return batch
