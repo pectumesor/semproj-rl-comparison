@@ -184,7 +184,6 @@ def _resample_polyline(points: np.ndarray, n_points: int) -> np.ndarray:
     return np.column_stack([np.interp(s, cum, points[:, 0]),
                             np.interp(s, cum, points[:, 1])])
 
-
 def dynamic_time_warping(test_trajectory, reference_trajectory):
     """
 
@@ -220,7 +219,6 @@ def dynamic_time_warping(test_trajectory, reference_trajectory):
 def normalized_path_length(test_trajectory, reference_trajectory):
 
     return -1 if len(test_trajectory) == 0 else path_length(test_trajectory) / path_length(reference_trajectory)
-
 
 def evaluate_model_on_metrics(agent, env, episodes,
                                nr_runs, json_path, backbone_type):
