@@ -342,6 +342,6 @@ def test_triangulation(json_path: str):
     
 
 if __name__ == "__main__":
-    test_triangulation("rooms/cross_room.json")
+    test_triangulation("rooms/I_maze_room.json")
 
     

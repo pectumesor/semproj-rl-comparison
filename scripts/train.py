@@ -74,13 +74,14 @@ def main(cfg: DictConfig):
         eval_env = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays,
                                      obs_dim=ray_dim, num_envs=cfg.env.num_eval_envs, device=device)
 
-        buffer = create_buffer(type=cfg.algorithm.name, ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim,
+        buffer = create_buffer(backbone_type=cfg.backbone.name, algorithm_name=cfg.algorithm.name,
+                               ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim,
                                device=device, cfg=cfg)
 
         algorithm = create_algorithm(cfg=cfg, type=cfg.backbone.name, buffer=buffer, device=device,
                                      env=env, eval_env=eval_env, agent=agent)
 
-        algorithm.train(trial_name=trial_name, run_dir=run_dir)
+        algorithm.train(run_dir=run_dir)
         
         agent.load_model(run_dir / f"best.pt", device, algorithm.optimizer)
         agent.eval()

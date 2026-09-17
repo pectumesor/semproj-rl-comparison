@@ -53,7 +53,3 @@ class SACAgent(BaseAgent):
         optimizers["actor"].load_state_dict(checkpoint["optimizer_actor"])
         optimizers["critic"].load_state_dict(checkpoint["optimizer_critic"])
         optimizers["alpha"].load_state_dict(checkpoint["optimizer_alpha"])
-
-class RecurrentSACAgent(RecurrentAgent):
-    def __init__(self, obs_embed_model, backbone_model, actor, critic):
-        super().__init__(obs_embed_model, backbone_model, actor, critic)
