@@ -54,7 +54,7 @@ def main(cfg: DictConfig):
                         group=cfg.wandb.group, name=f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}_seed_{cfg.seed}",
                         tags=[f"backbone:{cfg.backbone.name}", f"encoder:{cfg.observation.name}",f"algorithm:{cfg.algorithm.name}",
                               f"frame_stack:{frame_stack}", f"grid_cell:{grid_cell}",
-                              f"auxiliary_head:{auxiliary_head}"],
+                              f"auxiliary_head:{auxiliary_head}", f"room:{cfg.env.room_path}"],
                         sync_tensorboard=True, reinit=True, mode=cfg.wandb.mode):
 
         trial_name = wandb.run.name
