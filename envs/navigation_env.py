@@ -53,6 +53,7 @@ class NavigationEnv(gym.Env):
         self.device    = device
         self.agent     = agent
         self.random_pos_flag = cfg.env.rand_pos == "True"
+        self.seed = cfg.seed
 
         self._half_fov_rad = float(np.deg2rad(self.fov / 2.0))
         self.goal_radius  = float(cfg.env.get("goal_radius", 1e-4))

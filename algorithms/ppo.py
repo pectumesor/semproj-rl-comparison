@@ -6,7 +6,7 @@ import numpy as np
 from omegaconf import DictConfig
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer
+from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer, RecurrentRolloutBuffer, RecurrentRolloutBatch
 import torch.optim as optim
 import gymnasium as gym
 from tqdm import tqdm
@@ -58,7 +58,7 @@ class PPO(ABC):
 class MLPPPO(PPO):
     
     def __init__(self,
-                buffer: RolloutBuffer, device: torch.device,
+                buffer: RolloutBuffer | RecurrentRolloutBuffer, device: torch.device,
                 env: gym.Env, eval_env: gym.Env, agent: PPOAgent | RecurrentPPOAgent,
                 cfg: DictConfig
                 ):
@@ -68,7 +68,7 @@ class MLPPPO(PPO):
         self.buffer = buffer
         self.device = device
         self.env = env
-        self.eval_env = eval_env 
+        self.eval_env = eval_env
         
         # -- Architecture --
         self.agent = agent
@@ -131,7 +131,7 @@ class MLPPPO(PPO):
                     std=action_std,
                     val=value,
                     done=terminated | truncated,
-                    rew=reward
+                    rew=reward,
                 )
 
                 obs = next_obs
@@ -361,12 +361,12 @@ class MLPPPO(PPO):
 
                 returns += reward * active
                 lengths += active
-                active &= ~(terminated | truncated)
+                active &= not (terminated | truncated)
 
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item()
 
-    def train(self, trial_name: str, run_dir = None):
+    def train(self, run_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
@@ -451,20 +451,22 @@ class MLPPPO(PPO):
                 break
 
 class RecurrentPPO(MLPPPO):
-    def __init__(self, num_layers: int, hidden_size: int, num_minibatches: int, **kwargs):
+    def __init__(self, num_layers: int, hidden_size: int, minibatch_size: int, bptt_window: int,
+                  **kwargs):
         super().__init__(**kwargs)
 
         self.num_layers = num_layers
         self.hidden_size = hidden_size
-        if self.buffer.num_envs % num_minibatches != 0:
+        self.bptt_window_size = bptt_window
+        if self.buffer.num_envs % minibatch_size != 0:
             raise ValueError(
-                f"For RecurrentPPO, it must hold that num_envs % num_minibatches == 0 "
-                f"Current num_envs: {self.buffer.num_envs}, num_minibatches: {num_minibatches}"
+                f"For RecurrentPPO, it must hold that num_envs % minibatch_size == 0 "
+                f"Current num_envs: {self.buffer.num_envs}, minibatch_size: {minibatch_size}"
             )
-        else:
-              self.mini_batch = self.buffer.num_envs // num_minibatches
+        self.mini_batch = minibatch_size
  
-    def collect_rollout(self, obs: torch.Tensor, lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
+    def collect_rollout(self, obs: torch.Tensor, lstm_state: Tuple[torch.Tensor, torch.Tensor],
+                         done: torch.Tensor, episode_starts: torch.Tensor):
     
         with torch.no_grad():
             for _ in range(self.buffer.num_steps):
@@ -473,11 +475,10 @@ class RecurrentPPO(MLPPPO):
                 obs["rays"][done]    = new_obs["rays"][done]
                 obs["proprio"][done] = new_obs["proprio"][done]
 
-                episode_start = done
 
                 (action, action_clipped,
                     action_log_prob, action_mu, action_std,
-                    value, lstm_state) = self.agent.select_action(obs, lstm_state, episode_start)
+                    value, lstm_state) = self.agent.select_action(obs, lstm_state, episode_starts)
                 next_obs, reward, terminated, truncated, info = self.env.step(action_clipped)
                 done = terminated | truncated
 
@@ -492,43 +493,60 @@ class RecurrentPPO(MLPPPO):
                     std=action_std,
                     val=value,
                     done=done,
-                    episode_start=episode_start,
-                    rew=reward
+                    rew=reward,
+                    ep_starts=episode_starts,
+                    hidden_states=lstm_state[0],
+                    cell_states=lstm_state[1]
                 )
 
                 obs = next_obs
+                episode_starts = done
 
             last_val = self.agent.get_value(obs, lstm_state, torch.zeros_like(done))
             self.buffer.compute_returns(last_val)
 
-        return obs, lstm_state, done
+        return obs, lstm_state, done, episode_starts
 
-    def sample_mini_batch(self, mini_batch: RolloutBatch):
-        # Shuffle env axis only — preserves temporal ordering needed for BPTT
+    def sample_mini_batch(self, mini_batch: RecurrentRolloutBatch):
+        # Shuffle env index only, to keep time axis ordered for proper recurrent state evolution
+        # For every random env index batch, go over steps on window size steps to compute gradients over window size
+        # i.e.: Truncated BPTT.
+      
+        rollout_batch = mini_batch.rollout
+        num_steps = self.buffer.num_steps
+
         for _ in range(self.n_epochs):
             env_ids = torch.randperm(self.buffer.num_envs, device=self.device)
 
             for start in range(0, self.buffer.num_envs, self.mini_batch):
                 end = start + self.mini_batch
-                mini_batch_envs_ids = env_ids[start:end]
+                batch_env_ids = env_ids[start:end]
 
-                yield (RolloutBatch(
-                    rays=mini_batch.rays[:, mini_batch_envs_ids],
-                    proprio=mini_batch.proprio[:, mini_batch_envs_ids],
-                    act=mini_batch.act[:, mini_batch_envs_ids],
-                    logp=mini_batch.logp[:, mini_batch_envs_ids],
-                    mu=mini_batch.mu[:, mini_batch_envs_ids],
-                    std=mini_batch.std[:, mini_batch_envs_ids],
-                    val=mini_batch.val[:, mini_batch_envs_ids],
-                    ret=mini_batch.ret[:, mini_batch_envs_ids],
-                    adv=mini_batch.adv[:, mini_batch_envs_ids],
-                    done=mini_batch.done[:, mini_batch_envs_ids],
-                    episode_start=mini_batch.episode_start[:, mini_batch_envs_ids]
-                ), mini_batch_envs_ids)
+                for w_start in range(0, num_steps, self.bptt_window_size):
+                    w_end = min(w_start + self.bptt_window_size, num_steps)
 
-    def update(self, initial_lstm_state: Tuple[torch.Tensor, torch.Tensor]):
+                    yield (RecurrentRolloutBatch(
+                        rollout= RolloutBatch(rays=rollout_batch.rays[w_start:w_end, batch_env_ids],
+                                            proprio=rollout_batch.proprio[w_start:w_end, batch_env_ids],
+                                            act=rollout_batch.act[w_start:w_end, batch_env_ids],
+                                            logp=rollout_batch.logp[w_start:w_end, batch_env_ids],
+                                            mu=rollout_batch.mu[w_start:w_end, batch_env_ids],
+                                            std=rollout_batch.std[w_start:w_end, batch_env_ids],
+                                            val=rollout_batch.val[w_start:w_end, batch_env_ids],
+                                            ret=rollout_batch.ret[w_start:w_end, batch_env_ids],
+                                            adv=rollout_batch.adv[w_start:w_end, batch_env_ids],
+                                            done=rollout_batch.done[w_start:w_end, batch_env_ids],
+                                            ),
+                            ep_start = mini_batch.ep_start[w_start:w_end, batch_env_ids],
+                            hidden_state = mini_batch.hidden_state[w_start, :, batch_env_ids],
+                            cell_state = mini_batch.cell_state[w_start, :, batch_env_ids]
+                            )
+                        , batch_env_ids)
 
-        rollout_batch = self.buffer.get()
+    def update(self):
+
+        recurrent_rollout_batch = self.buffer.get()
+        rollout_batch = recurrent_rollout_batch.rollout
 
         mean_kl = 0
         max_kl = 0.0
@@ -546,10 +564,12 @@ class RecurrentPPO(MLPPPO):
         var_returns = flat_ret.var()
         explained_variance = (1 - (flat_ret - flat_val).var() / (var_returns + 1e-8)).item()
 
-        for mini_batch, mini_batch_env_ids in self.sample_mini_batch(rollout_batch):
+        for bptt_window_batch, bptt_window_env_ids in self.sample_mini_batch(recurrent_rollout_batch):
+
+            mini_batch = bptt_window_batch.rollout
 
             obs_batch = {"rays": mini_batch.rays, "proprio": mini_batch.proprio}
-            episode_start_batch = mini_batch.episode_start
+            episode_start_batch = bptt_window_batch.ep_start
 
             act_batch = mini_batch.act.reshape(-1, *mini_batch.act.shape[2:])
             old_logp_batch = mini_batch.logp.reshape(-1)
@@ -559,12 +579,15 @@ class RecurrentPPO(MLPPPO):
             ret_batch = mini_batch.ret.reshape(-1)
             adv_batch = mini_batch.adv.reshape(-1)
 
+            hidden_state_batch = bptt_window_batch.hidden_state
+            cell_state_batch = bptt_window_batch.cell_state
+
             # Normalize advantage
             adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8) 
 
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.agent.evaluate_actions(
                 obs_batch,
-                (initial_lstm_state[0][:, mini_batch_env_ids], initial_lstm_state[1][:, mini_batch_env_ids]),
+                (hidden_state_batch, cell_state_batch),
                 episode_start_batch, act_batch
             )
 
@@ -654,17 +677,18 @@ class RecurrentPPO(MLPPPO):
 
                 returns += reward * active
                 lengths += active
-                active &= ~done
+                active &= not done
 
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item()
 
-    def train(self,  trial_name: str, run_dir = None):
+    def train(self, run_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
         done = torch.zeros(self.buffer.num_envs, dtype=torch.bool, device=self.device)
-
+        episode_starts = torch.ones(self.buffer.num_envs, dtype=torch.bool, device=self.device)
+        
         rollout_lstm_state = (
             torch.zeros((self.num_layers, self.buffer.num_envs, self.hidden_size),
                         dtype=torch.float, device=self.device),
@@ -672,9 +696,9 @@ class RecurrentPPO(MLPPPO):
                          dtype=torch.float, device=self.device)
         )
 
+
         iterations_bar = tqdm(iterable=range(self.n_iterations), total=self.n_iterations,
                               desc="Training PPO")
-
 
         for iter in iterations_bar:
 
@@ -682,9 +706,8 @@ class RecurrentPPO(MLPPPO):
             if self.anneal_lr:
                 self.anneal_learning_rate(iteration)
 
-            initial_lstm_state = (rollout_lstm_state[0].clone(), rollout_lstm_state[1].clone())
-            obs, rollout_lstm_state, done = self.collect_rollout(obs, rollout_lstm_state, done)
-            stats = self.update(initial_lstm_state)
+            obs, rollout_lstm_state, done, episode_starts = self.collect_rollout(obs, rollout_lstm_state, done, episode_starts)
+            stats = self.update()
 
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:

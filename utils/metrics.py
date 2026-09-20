@@ -223,9 +223,10 @@ def normalized_path_length(test_trajectory, reference_trajectory):
 def evaluate_model_on_metrics(agent, env, episodes,
                                nr_runs, json_path, backbone_type):
 
-    wandb.run.define_metric("metrics/*", step_metric="metrics/step")
+    wandb.run.define_metric("metrics/*", step_metric="metrics/seed")
 
     reference_trajectory = generate_reference_trajectory(json_path)
+    cr_values, dtw_values, npl_values = [], [], []
 
     # For Means of Means increase the nr_runs to > 1
     if backbone_type == "mlp":
@@ -237,17 +238,21 @@ def evaluate_model_on_metrics(agent, env, episodes,
     
 
     for i in tqdm(range(nr_runs), desc="Evaluating policy on metrics"):
-        cr_value = cr(agent, env, episodes)
+        cr_values.append(cr(agent, env, episodes))
         # Score DTW and NPL on the *same* goal-reaching rollout.
-        dtw_value = dynamic_time_warping(trajectory[i], reference_trajectory)
-        npl_value = normalized_path_length(trajectory[i], reference_trajectory)
+        dtw_values.append(dynamic_time_warping(trajectory[i], reference_trajectory))
+        npl_values.append(normalized_path_length(trajectory[i], reference_trajectory))
 
-        wandb.log({
-            "metrics/step": i,
-            "metrics/completion_rate": cr_value,
-            "metrics/dynamic_time_warping":dtw_value,
-            "metrics/normalized_path_length": npl_value
-        })
+    cr_values = np.array(cr_values)
+    dtw_values = np.array(dtw_values)
+    npl_values = np.array(npl_values)
+
+    wandb.log({
+        "metrics/seed": env.seed,
+        "metrics/completion_rate": cr_values.mean(),
+        "metrics/dynamic_time_warping":dtw_values.mean(),
+        "metrics/normalized_path_length": npl_values.mean()
+    })
 
          
 

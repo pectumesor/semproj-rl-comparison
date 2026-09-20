@@ -2,7 +2,7 @@ from models import (MLPObservationEmbeddings, CNNObservationEmbeddings,
                      MLPBackbone, SimpleLSTM, GuassianPolicyHead, ValueNet, PPOAgent,
                       SquashedGaussianPolicyHead, DoubleQNet, SACAgent, RecurrentPPOAgent)
 
-from algorithms import MLPPPO, RecurrentPPO, RolloutBuffer, ReplayBuffer
+from algorithms import MLPPPO, RecurrentPPO, RolloutBuffer, ReplayBuffer, RecurrentRolloutBuffer
 
 from omegaconf import DictConfig
 from stable_baselines3 import PPO, SAC
@@ -196,10 +196,14 @@ def create_algorithm(cfg: DictConfig, type: str, buffer, device, env, eval_env, 
                                      buffer=buffer, device=device, env=env, eval_env=eval_env,
                                     agent=agent, cfg=cfg)
 
-def create_buffer(type: str, ray_dim: tuple, proprio_dim: int, device: torch.device, cfg: DictConfig):
+def create_buffer(backbone_type: str, algorithm_name:str, 
+                  ray_dim: tuple, proprio_dim: int, device: torch.device, cfg: DictConfig):
 
-    if type == "ppo":
-        return RolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device,cfg=cfg)
+    if algorithm_name == "ppo":
+        if backbone_type == "mlp":
+            return RolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device,cfg=cfg)
+        else:
+            return RecurrentRolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device, cfg=cfg)
     else:
         return ReplayBuffer(ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim, device=device, cfg=cfg)
 
