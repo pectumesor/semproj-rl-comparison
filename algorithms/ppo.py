@@ -700,7 +700,6 @@ class RecurrentPPO(MLPPPO):
         iterations_bar = tqdm(iterable=range(self.n_iterations), total=self.n_iterations,
                               desc="Training PPO")
 
-
         for iter in iterations_bar:
 
             iteration = iter + 1
