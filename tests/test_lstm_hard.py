@@ -63,7 +63,8 @@ def main(cfg: DictConfig):
 
 
         algorithm = RecurrentPPO(num_layers=cfg.algorithm.num_layers, hidden_size=cfg.algorithm.hidden_size,
-                                 num_minibatches=cfg.algorithm.minibatch_size,
+                                 minibatch_size=cfg.algorithm.minibatch_size,
+                                 bptt_window=cfg.backbone.bptt_window_size,
                                  buffer=buffer, device=device, env=env, eval_env=eval_env,
                                 agent=agent, cfg=cfg)
 

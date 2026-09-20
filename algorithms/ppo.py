@@ -475,6 +475,8 @@ class RecurrentPPO(MLPPPO):
                 obs["rays"][done]    = new_obs["rays"][done]
                 obs["proprio"][done] = new_obs["proprio"][done]
 
+                # Store incoming state to rollout buffer
+                in_lstm_state = lstm_state
 
                 (action, action_clipped,
                     action_log_prob, action_mu, action_std,
@@ -495,8 +497,8 @@ class RecurrentPPO(MLPPPO):
                     done=done,
                     rew=reward,
                     ep_starts=episode_starts,
-                    hidden_states=lstm_state[0],
-                    cell_states=lstm_state[1]
+                    hidden_states=in_lstm_state[0],
+                    cell_states=in_lstm_state[1]
                 )
 
                 obs = next_obs
