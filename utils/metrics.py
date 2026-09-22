@@ -254,6 +254,57 @@ def evaluate_model_on_metrics(agent, env, episodes,
         "metrics/normalized_path_length": npl_values.mean()
     })
 
+def test_evaluate_scatter_plot(agent, env, episodes, nr_runs, json_path, backbone_type):
+
+    # scatter_rows: a list shared across calls, e.g. created once before the seed loop
+
+    scatter_rows = []
+
+    wandb.run.define_metric("metrics/*", step_metric="metrics/seed")
+
+    reference_trajectory = generate_reference_trajectory(json_path)
+    cr_values, dtw_values, npl_values = [], [], []
+
+    # For Means of Means increase the nr_runs to > 1
+    if backbone_type == "mlp":
+        trajectory = extract_trajectory_mlp(agent, env, nr_runs)
+        cr = completion_rate_mlp
+    else:
+        trajectory = extract_trajectory_recurrent(agent, env, nr_runs)
+        cr = completion_rate_recurrent
+
+    for i in tqdm(range(nr_runs), desc="Evaluating policy on metrics"):
+        cr_values.append(cr(agent, env, episodes))
+        # Score DTW and NPL on the *same* goal-reaching rollout.
+        dtw_values.append(dynamic_time_warping(trajectory[i], reference_trajectory))
+        npl_values.append(normalized_path_length(trajectory[i], reference_trajectory))
+
+    cr_values = np.array(cr_values)
+    dtw_values = np.array(dtw_values)
+    npl_values = np.array(npl_values)
+
+    # Append this seed's runs to the shared rows
+    for c, d, n in zip(cr_values, dtw_values, npl_values):
+        scatter_rows.append([env.seed, float(c), float(d), float(n)])
+
+    # Rebuild the table from all rows so far; same keys -> the plots update in place
+    table = wandb.Table(
+        columns=["seed", "completion_rate", "dynamic_time_warping", "normalized_path_length"],
+        data=scatter_rows,
+    )
+
+    wandb.log({
+        "metrics/seed": env.seed,
+        "metrics/completion_rate": cr_values.mean(),
+        "metrics/dynamic_time_warping": dtw_values.mean(),
+        "metrics/normalized_path_length": npl_values.mean(),
+        "scatter/completion_rate": wandb.plot.scatter(
+            table, "seed", "completion_rate", title="Completion rate per seed"),
+        "scatter/dynamic_time_warping": wandb.plot.scatter(
+            table, "seed", "dynamic_time_warping", title="DTW per seed"),
+        "scatter/normalized_path_length": wandb.plot.scatter(
+            table, "seed", "normalized_path_length", title="NPL per seed"),
+    })
          
 
     

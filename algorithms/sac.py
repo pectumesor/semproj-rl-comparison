@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import gymnasium as gym
 from tqdm import tqdm
 
-from models.agents import SACAgent, RecurrentSACAgent
+from models.agents import SACAgent
 from models.heads import DoubleQNet
 from .early_stopping import ConvergenceMonitor
 
@@ -78,7 +78,7 @@ class SAC(ABC):
 
 class MLPSAC(SAC):
     def __init__(self, buffer: ReplayBuffer, device: torch.device,
-                env: gym.Env, eval_env: gym.Env, agent: SACAgent | RecurrentSACAgent,
+                env: gym.Env, eval_env: gym.Env, agent: SACAgent,
                 cfg:DictConfig):
         
         super().__init__()

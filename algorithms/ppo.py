@@ -361,7 +361,7 @@ class MLPPPO(PPO):
 
                 returns += reward * active
                 lengths += active
-                active &= not (terminated | truncated)
+                active &= ~(terminated | truncated)
 
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item()
@@ -679,7 +679,7 @@ class RecurrentPPO(MLPPPO):
 
                 returns += reward * active
                 lengths += active
-                active &= not done
+                active &= ~done
 
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item()
