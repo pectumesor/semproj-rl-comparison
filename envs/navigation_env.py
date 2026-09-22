@@ -386,11 +386,6 @@ class NavigationEnvEasy(NavigationEnv):
             "proprio": gym.spaces.Box(-1.0, 1.0, shape=(4,),          dtype=np.float32),
         })
 
-        self.initial_pos = torch.tensor(
-                    [cfg.env.init_pos["x"], cfg.env.init_pos["y"]],
-                    dtype=torch.float32, device=device,
-                )
-
     def reset(self, seed=None, options=None, done: torch.Tensor = None):
         """
         done: bool tensor (num_envs,) — reset only those envs. None resets all.

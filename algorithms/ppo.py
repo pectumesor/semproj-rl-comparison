@@ -361,7 +361,7 @@ class MLPPPO(PPO):
 
                 returns += reward * active
                 lengths += active
-                active &= not (terminated | truncated)
+                active &= ~(terminated | truncated)
 
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item()

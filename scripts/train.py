@@ -12,6 +12,7 @@ sys.path.append(str(ROOT_DIR))
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
+from gymnasium.wrappers import FrameStackObservation
 
 from utils import (create_ppo_agent, evaluate_model_on_metrics,
 save_video, create_buffer, create_algorithm)
@@ -66,20 +67,23 @@ def main(cfg: DictConfig):
         num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
         ray_dim = np.array([cfg.env.ray_encoding, num_rays])
 
-        agent = create_ppo_agent(observation_type=cfg.observation.name, backbone_type=cfg.backbone.name,
-                                 ray_dim= ray_dim, cfg=cfg).to(device)
+        agent = create_ppo_agent(ray_dim= ray_dim, cfg=cfg).to(device)
 
         env   = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=ray_dim,
                                            num_envs=cfg.env.num_envs, device=device)
         eval_env = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays,
                                      obs_dim=ray_dim, num_envs=cfg.env.num_eval_envs, device=device)
 
+        if frame_stack:
+            env = FrameStackObservation(env, stack_size=cfg.observation.frame_stack.size)
+            eval_env = FrameStackObservation(eval_env, stack_size=cfg.observation.frame_stack.size)
+
         buffer = create_buffer(backbone_type=cfg.backbone.name, algorithm_name=cfg.algorithm.name,
                                ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim,
                                device=device, cfg=cfg)
 
-        algorithm = create_algorithm(cfg=cfg, type=cfg.backbone.name, buffer=buffer, device=device,
-                                     env=env, eval_env=eval_env, agent=agent)
+        algorithm = create_algorithm(cfg=cfg, algorithm_name=cfg.algorithm.name, backbone_type=cfg.backbone.name,
+                                     buffer=buffer, device=device, env=env, eval_env=eval_env, agent=agent)
 
         algorithm.train(run_dir=run_dir)
         

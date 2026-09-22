@@ -1,0 +1,21 @@
+defaults:
+  - algorithm: ppo
+  - env: base_env
+  - observation: mlp_observation
+  - backbone: mlp_backbone
+  - head: base_head
+  - _self_
+
+env:
+  # base_env's default room_path (rooms/test_room.json) has no start_pos/goal_pos,
+  # so point at a room that actually has them.
+  room_path: "rooms/one_room.json"
+
+wandb:
+  project: semproj
+  entity: eazevedo-eth-z-rich
+  group: test_sac
+  tags: [ppo]
+  mode: disabled     # online | offline | disabled
+
+seed: 42
