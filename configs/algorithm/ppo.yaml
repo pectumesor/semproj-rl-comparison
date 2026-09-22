@@ -30,6 +30,11 @@ anneal_lr: true
 n_iterations: 1000
 max_steps: 512
 num_steps: 256
+# How many env steps (per env) one training iteration collects. PPO fills a
+# whole rollout of num_steps before updating, so this equals num_steps.
+# Used by the test harness to size SB3's total_timesteps to match this
+# algorithm's actual step count: n_iterations * env_steps_per_iteration * num_envs.
+env_steps_per_iteration: ${.num_steps}
 n_epochs: 2
 save_interval: 100
 mini_batch_size: 256

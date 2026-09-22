@@ -9,16 +9,26 @@ class FrameStackMLP(nn.Module):
     """
 
     def __init__(self,
-                obs_dim: int,
+                input_dim: int,
                 stack_depth: int,
                 hidden_sizes: Sequence[int],
                 feature_dim: int):
         super().__init__()
 
-        self.net = build_mlp(obs_dim * stack_depth, hidden_sizes, feature_dim)
-    
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.net(obs)
+        self.net = build_mlp(input_dim * stack_depth, hidden_sizes, feature_dim)
+
+    def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
+            # Input:
+            #   - rays: (stack_size, num_envs, num_channels, num_rays)
+            #   - proprio: (stack_size, num_envs, 4)
+            _, num_envs, _, _ = rays.shape
+
+            rays_flat = rays.flatten(2) # (F,E,C,R) -> (F,E,C*R)
+            x = torch.cat([rays_flat, proprio], dim=-1) # (F,E,C*R+4) == (F,E,input_dim)
+
+            # (F,E,input_dim) -> (E,F,input_dim) -> (E, F*input_dim)
+            x = x.permute(1, 0, 2).reshape(num_envs, -1) 
+            return self.net(x)
     
 
 class FrameStackCNN(nn.Module):
@@ -33,15 +43,20 @@ class FrameStackCNN(nn.Module):
                 out_feature_dim: int):
         super().__init__()
 
-        # TODO: During experiments decide on the appropriate cnn_block depth and find final flattened feature dimension
-        self.block = cnn_block(input_channels= stack_depth, output_channels= stack_depth * 2)
-        self.feature_map = nn.Linear(128, out_feature_dim)
+        # TODO: During experiments decide on the appropriate cnn_block depth
+        self.block = nn.Sequential(*cnn_block(input_channels= stack_depth, output_channels= stack_depth * 2))
+        self.feature_map = nn.LazyLinear(out_feature_dim) # input dim depends on ray_dim, inferred on first forward
 
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+    def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
+            # Input:
+            #   - rays: (stack_size, num_envs, num_channels, num_rays)
+            #   - proprio: (stack_size, num_envs, 4)
+            _, num_envs, _, _ = rays.shape
 
-        cnn_feat = self.block(obs)
-        cnn_feat = cnn_feat.flatten()
+            rays_img = rays.permute(1, 0, 2, 3) # (F,E,C,R) -> (E,F,C,R): stacked frames become CNN channels
+            cnn_feat = self.block(rays_img).flatten(1) # (E, out_channels, H', W') -> (E, out_channels*H'*W')
 
-        return self.feature_map(cnn_feat)
- 
+            proprio_flat = proprio.permute(1, 0, 2).reshape(num_envs, -1) # (F,E,4) -> (E, F*4)
 
+            x = torch.cat([cnn_feat, proprio_flat], dim=-1)
+            return self.feature_map(x)

@@ -1,8 +1,9 @@
 from models import (MLPObservationEmbeddings, CNNObservationEmbeddings,
                      MLPBackbone, SimpleLSTM, GuassianPolicyHead, ValueNet, PPOAgent,
-                      SquashedGaussianPolicyHead, DoubleQNet, SACAgent, RecurrentPPOAgent)
+                      SquashedGaussianPolicyHead, DoubleQNet, SACAgent, RecurrentPPOAgent,
+                      FrameStackMLP, FrameStackCNN)
 
-from algorithms import MLPPPO, RecurrentPPO, RolloutBuffer, ReplayBuffer, RecurrentRolloutBuffer
+from algorithms import MLPPPO, RecurrentPPO, MLPSAC, RolloutBuffer, ReplayBuffer, RecurrentRolloutBuffer
 
 from omegaconf import DictConfig
 from stable_baselines3 import PPO, SAC
@@ -12,47 +13,68 @@ import numpy as np
 import torch
 
 
-def create_observation_model(type: str, ray_dim: tuple, cfg: DictConfig):
+def create_observation_model(frame_stack: bool, observation_type: str, ray_dim: tuple, cfg: DictConfig):
+    if frame_stack:
 
-    if type == "mlp":
-        return MLPObservationEmbeddings(
-            input_dim=np.prod(ray_dim) + cfg.env.proprio_dim,
-            hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
-            feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
-            )
-    elif type == "cnn":
+        if observation_type == "mlp":
+            return MLPObservationEmbeddings(
+                input_dim=np.prod(ray_dim) + cfg.env.proprio_dim,
+                hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
+                feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
+                )
+        elif observation_type == "cnn":
 
-        return CNNObservationEmbeddings(ray_channels=cfg.env.ray_encoding,
+            return CNNObservationEmbeddings(ray_channels=cfg.env.ray_encoding,
                                         cnn_out_channels=cfg.observation.cnn_output_channels,
                                         proprio_dim=cfg.env.proprio_dim,
                                         proprio_hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
                                         feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
                                         )
     
-def create_backbone_model(type: str, cfg: DictConfig):
+def create_backbone_model(backbone_type: str, cfg: DictConfig):
 
-    if type == "mlp":
+    if backbone_type == "mlp":
 
         return MLPBackbone(input_dim=cfg.observation.obs_embed_hidden_sizes[-1],
                            hidden_sizes=cfg.backbone.backbone_hidden_sizes,
                            output_dim=cfg.backbone.backbone_hidden_sizes[-1])
-    elif type == "lstm":
+    elif backbone_type == "lstm":
 
         return SimpleLSTM(input_dim=cfg.observation.obs_embed_hidden_sizes[-1],
                           feature_dim= cfg.backbone.lstm_backbone_feature_dim,
                           num_layers=cfg.backbone.lstm_num_layers)
     
-def create_ppo_agent(observation_type: str, backbone_type: str, ray_dim: tuple,  cfg: DictConfig):
+def create_agent(sb3_flag: bool, cfg: DictConfig, ray_dim: tuple, env = None, tensorboard_log: str = None):
+
+    if sb3_flag: # Create Stable Baselines 3 Agent
+        if cfg.algorithm.name == "ppo":
+            return create_sb3_ppo_agent(backbone_type=cfg.backbone.name,
+                                        cfg=cfg, ray_dim=ray_dim, env=env,
+                                        tensorboard_log=tensorboard_log)
+        else:
+            return create_sb3_sac_agent(cfg=cfg, ray_dim=ray_dim, env=env,
+                                        tensorboard_log=tensorboard_log)
+    else: # Create my custom agent
+        if cfg.algorithm.name == "ppo":
+            return create_ppo_agent(observation_type=cfg.observation.name,
+                                    backbone_type=cfg.backbone.name, ray_dim=ray_dim,
+                                    cfg=cfg)
+        else:
+            return create_sac_agent(observation_type=cfg.observation.name, ray_dim=ray_dim,
+                                    cfg=cfg)
+    
+def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
 
 
-    observation_model = create_observation_model(type=observation_type,
-                                                 ray_dim=ray_dim,
+    observation_model = create_observation_model(frame_stack=cfg.observation.frame_stack.enabled,
+                                                observation_type=cfg.observation.name,
+                                                ray_dim=ray_dim,
                                                  cfg=cfg
                                                 )
-    
-    backbone_model = create_backbone_model(type=backbone_type,
+
+    backbone_model = create_backbone_model(backbone_type=backbone_type,
                                            cfg=cfg)
-    
+
     actor = GuassianPolicyHead(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
                                 actions_dim=cfg.env.act_dim,
                                 hidden_sizes=cfg.head.policy_hidden_sizes)
@@ -71,18 +93,18 @@ def create_ppo_agent(observation_type: str, backbone_type: str, ray_dim: tuple, 
                                  actor=actor, critic=critic,
                                  action_low=cfg.env.action_low, action_high=cfg.env.action_high)
 
-def create_sac_agent(observation_type: str, backbone_type: str, ray_dim:int, cfg: DictConfig):
+def create_sac_agent(observation_type: str, ray_dim:int, cfg: DictConfig):
      
-    observation_model = create_observation_model(type=observation_type,
-                                                 ray_dim=ray_dim, 
+    observation_model = create_observation_model(observation_type=observation_type,
+                                                 ray_dim=ray_dim,
                                                  cfg=cfg
                                                 )
-    
-    backbone_model = create_backbone_model(type=backbone_type,
+
+    backbone_model = create_backbone_model(backbone_type="mlp",
                                            cfg=cfg)
     
     actor = SquashedGaussianPolicyHead(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
-                                actions_dim=cfg.env.act_dim,
+                                action_dim=cfg.env.act_dim,
                                 hidden_sizes=cfg.head.policy_hidden_sizes)
     
     critic = DoubleQNet(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
@@ -93,7 +115,7 @@ def create_sac_agent(observation_type: str, backbone_type: str, ray_dim:int, cfg
                     backbone_model=backbone_model,
                     actor=actor, critic=critic)
 
-def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env, tensorboard_log: str = None):
+def create_sb3_ppo_agent(backbone_type: str, cfg: DictConfig, ray_dim: int, env, tensorboard_log: str = None):
 
     from envs import MyBackbone  # deferred: envs -> utils.geometry -> utils -> models is circular at module scope
     features_extractor_kwargs = dict(
@@ -114,7 +136,7 @@ def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env, tensorbo
                       vf=list(cfg.head.value_hidden_sizes)),
         share_features_extractor=True,
     )
-    if type == "mlp":
+    if backbone_type == "mlp":
         return PPO(
             "MlpPolicy",
             env,
@@ -156,7 +178,7 @@ def create_sb3_ppo_agent(type: str, cfg: DictConfig, ray_dim: int, env, tensorbo
             verbose=1,
         )
 
-def create_sb3_sac_agent(cfg: DictConfig, ray_dim: int, env):
+def create_sb3_sac_agent(cfg: DictConfig, ray_dim: int, env, tensorboard_log: str = None):
 
     from envs import MyBackbone  # deferred: envs -> utils.geometry -> utils -> models is circular at module scope
     features_extractor_kwargs = dict(
@@ -183,12 +205,28 @@ def create_sb3_sac_agent(cfg: DictConfig, ray_dim: int, env):
             learning_starts=cfg.algorithm.warm_start_steps, batch_size=cfg.algorithm.mini_batch_size,
             tau=cfg.algorithm.tau, gamma=cfg.env.gamma, train_freq=cfg.algorithm.train_freq,
             gradient_steps=cfg.algorithm.n_gradient_update, target_entropy=cfg.algorithm.target_entropy,
-            policy_kwargs=sac_policy_kwargs, verbose=1,
+            # gSDE: hold exploration noise fixed for sde_sample_freq steps instead of
+            # resampling i.i.d. every env.step(). Per-step-independent noise on this env's
+            # instantaneous heading-turn action causes undirected jitter instead of committed
+            # travel toward the goal (see diagnosis in conversation); gSDE fixes that directly.
+            use_sde=True, sde_sample_freq=cfg.algorithm.train_freq,
+            policy_kwargs=sac_policy_kwargs, tensorboard_log=tensorboard_log, verbose=1,
         )
-        
-def create_algorithm(cfg: DictConfig, type: str, buffer, device, env, eval_env, agent):
 
-    if type == "mlp":
+def sb3_load(algorithm_type: str, path: str, env):
+
+    if algorithm_type == "ppo":
+       return PPO.load(path, env=env)
+    else:
+        return SAC.load(path, env=env)
+
+
+def create_algorithm(cfg: DictConfig, algorithm_name: str, backbone_type: str, buffer, device, env, eval_env, agent):
+
+    if algorithm_name == "sac":
+        return MLPSAC(buffer, device, env, eval_env, agent, cfg)
+
+    if backbone_type == "mlp":
         return MLPPPO(buffer, device, env, eval_env, agent, cfg)
     else:
         return RecurrentPPO(num_layers=cfg.backbone.lstm_num_layers, hidden_size=cfg.backbone.lstm_backbone_feature_dim,

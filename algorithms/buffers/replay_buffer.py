@@ -10,7 +10,10 @@ class ReplayBatch:
     act: torch.Tensor
     rew: torch.Tensor
     next_obs: dict
-    done: torch.Tensor
+    # True termination only (goal reached / failure), not time-limit truncation.
+    # Used to gate the critic's bootstrap: a truncated episode should still
+    # bootstrap off next_obs, since the environment didn't actually end there.
+    terminated: torch.Tensor
 
 
 class ReplayBuffer:
@@ -37,25 +40,25 @@ class ReplayBuffer:
         self.next_rays_buf   = torch.zeros((self.num_steps, self.num_envs, *ray_dim),   dtype=torch.float32, device=device)
         self.next_proprio_buf = torch.zeros((self.num_steps, self.num_envs, proprio_dim), dtype=torch.float32, device=device)
         self.rew_buf = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float32, device=device)
-        self.done_buf = torch.zeros((self.num_steps,  self.num_envs), dtype=torch.bool, device=device)
+        self.terminated_buf = torch.zeros((self.num_steps,  self.num_envs), dtype=torch.bool, device=device)
 
-    
+
     def store(
             self,
             obs: dict,
             act: torch.Tensor,
             rew: torch.Tensor,
             next_obs: dict,
-            done: torch.Tensor
+            terminated: torch.Tensor
             ):
-        
+
         self.rays_buf[self.ptr] = obs["rays"]
         self.proprio_buf[self.ptr] = obs["proprio"]
         self.act_buf[self.ptr] = act
         self.rew_buf[self.ptr] = rew
         self.next_rays_buf[self.ptr] = next_obs["rays"]
         self.next_proprio_buf[self.ptr] = next_obs["proprio"]
-        self.done_buf[self.ptr] = done
+        self.terminated_buf[self.ptr] = terminated
 
         self.ptr = (self.ptr + 1) % self.num_steps
         self.size = min(self.size + 1, self.num_steps)
@@ -77,5 +80,5 @@ class ReplayBuffer:
                 "rays": self.next_rays_buf[batch_idx, env_idx],
                 "proprio": self.next_proprio_buf[batch_idx, env_idx]
                 },
-            done=self.done_buf[batch_idx, env_idx],
+            terminated=self.terminated_buf[batch_idx, env_idx],
         )

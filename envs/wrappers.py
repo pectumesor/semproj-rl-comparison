@@ -165,7 +165,6 @@ class NavigationEnvEasySB3(NavigationEnvSB3):
 
         self._env = NavigationEnvEasy(cfg, None, num_rays, ray_dim, num_envs=1, device=device)
 
-
 class MyBackbone(BaseFeaturesExtractor):
     """
     SB3 features extractor that mirrors the custom PPO architecture:

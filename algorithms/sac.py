@@ -117,7 +117,7 @@ class MLPSAC(SAC):
         # Optimizer initialization
         encoder_params = list(self.agent.obs_embed_model.parameters()) + list(self.agent.backbone_model.parameters())
         self.actor_optimizer = optim.Adam(params=encoder_params + list(self.agent.actor.parameters()), lr=cfg.algorithm.actor_lr)
-        self.critic_optimizer = optim.Adam(params=encoder_params + list(self.agent.critic.parameters()), lr=cfg.algorithm.critic_lr)
+        self.critic_optimizer = optim.Adam(params=list(self.agent.critic.parameters()), lr=cfg.algorithm.critic_lr)
         self.alpha_optimizer = optim.Adam(params=[self.log_alpha], lr=cfg.algorithm.alpha_lr)
 
     
@@ -139,13 +139,15 @@ class MLPSAC(SAC):
 
         return alpha_loss
 
-    def compute_critic_loss(self, obs_batch, next_obs_batch, rew_batch, act_batch, done_batch):
+    def compute_critic_loss(self, obs_batch, next_obs_batch, rew_batch, act_batch, terminated_batch):
 
         with torch.no_grad():
             next_act, next_log_a = self.agent.sample_action(next_obs_batch)
             q1_target, q2_target = self.target_agent.get_state_action_value(next_obs_batch, next_act)
             q_val_next = torch.min(q1_target, q2_target).squeeze(-1) - self.alpha() * next_log_a
-            q_target_next = rew_batch + self.gamma * (1 - done_batch.float()) * q_val_next
+            # Bootstrap on terminated only: a truncated (time-limit) episode
+            # didn't actually end, so its next_obs still has future value.
+            q_target_next = rew_batch + self.gamma * (1 - terminated_batch.float()) * q_val_next
 
         # Here we track the gradients for the doubleQNets
         q_online, q_target = self.agent.get_state_action_value(obs_batch, act_batch)
@@ -170,12 +172,12 @@ class MLPSAC(SAC):
         obs_batch = replay_batch.obs
         act_batch = replay_batch.act
         rew_batch = replay_batch.rew
-        done_batch = replay_batch.done
+        terminated_batch = replay_batch.terminated
         next_obs_batch = replay_batch.next_obs
 
         # Update critic
         critic_loss = self.compute_critic_loss(obs_batch, next_obs_batch, rew_batch,
-                                               act_batch, done_batch)
+                                               act_batch, terminated_batch)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
@@ -205,32 +207,31 @@ class MLPSAC(SAC):
                               alpha=self.alpha().item(),
                               train_rew=rew_batch.mean().item())
     
-    def evaluate_policy(self,num_episodes=5):
-        returns = []
-        lengths = []
+    def evaluate_policy(self):
+        if self.eval_env is None:
+            return None, None
+
+        # One vectorized pass: eval_env.num_envs episodes run in parallel. Each
+        # env is scored only up to its first termination/truncation (mask `active`).
+        num_envs = self.eval_env.num_envs
+        returns = torch.zeros(num_envs, device=self.device)
+        lengths = torch.zeros(num_envs, device=self.device)
+        active  = torch.ones(num_envs, dtype=torch.bool, device=self.device)
 
         self.agent.eval()
         with torch.inference_mode():
-            for _ in tqdm(range(num_episodes), desc="Evaluating"):
-                obs, _ = self.eval_env.reset()
-                done = False
-                episode_return = 0.0
-                episode_length = 0
+            obs, _ = self.eval_env.reset()
 
-                while not done:
-                    action = self.agent.predict_action(obs)
-                    next_obs, reward, terminated, truncated, info = self.eval_env.step(action)
+            while active.any():
+                action = self.agent.predict_action(obs)
+                obs, reward, terminated, truncated, _ = self.eval_env.step(action)
 
-                    obs = next_obs
-                    episode_return += reward
-                    episode_length += 1
-                    done = terminated or truncated
-
-                returns.append(float(episode_return))
-                lengths.append(int(episode_length))
+                returns += reward * active
+                lengths += active
+                active &= ~(terminated | truncated)
 
         self.agent.train()
-        return float(np.mean(returns)), float(np.mean(lengths))
+        return returns.mean().item(), lengths.float().mean().item()
     
     def train(self, run_dir = None):
 
@@ -253,7 +254,7 @@ class MLPSAC(SAC):
                 next_obs, reward, terminated, truncated, info = self.env.step(actions)
                 done = terminated | truncated
 
-                self.buffer.store(obs, actions, reward, next_obs, done)
+                self.buffer.store(obs, actions, reward, next_obs, terminated)
                 
                 obs = next_obs
 
