@@ -245,9 +245,10 @@ class MLPSAC(SAC):
             with torch.no_grad():
                 steps += 1
                 if steps < self.warm_start_steps:
-                    # Uniform initilaized action of shape (num_envs, act_dim)
-                    actions = torch.empty((self.buffer.num_envs, self.buffer.act_dim),
-                                          dtype=torch.float32, device=self.buffer.device).uniform_(-1.0, 1.0)
+                    # Uniform initilaized action of shape (num_envs, act_dim), within the per-dimension env bounds
+                    actions = torch.rand((self.buffer.num_envs, self.buffer.act_dim),
+                                         dtype=torch.float32, device=self.buffer.device)
+                    actions = self.agent.action_center + self.agent.action_scale * (2.0 * actions - 1.0)
                 else:
                     actions, _ = self.agent.sample_action(obs)
                 

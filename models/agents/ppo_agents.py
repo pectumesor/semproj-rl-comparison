@@ -17,11 +17,12 @@ class PPOAgent(BaseAgent):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: nn.Module,
                  actor: GuassianPolicyHead, critic: ValueNet,
-                 action_low: int, action_high: int):
+                 action_low, action_high):
         super().__init__(obs_embed_model, backbone_model, actor, critic)
 
-        self.action_low = action_low
-        self.action_high = action_high
+        # Per-dimension bounds as buffers so they follow the agent's device
+        self.register_buffer("action_low",  torch.as_tensor(action_low,  dtype=torch.float32), persistent=False)
+        self.register_buffer("action_high", torch.as_tensor(action_high, dtype=torch.float32), persistent=False)
 
     def sample_action(self, obs: torch.Tensor):
 
@@ -47,7 +48,7 @@ class PPOAgent(BaseAgent):
     def predict_action(self, obs: dict):
         h = self.forward(obs)
         action = self.actor.act_inference(h)
-        return action.clamp(self.action_low, self.action_high)
+        return action.clamp(min=self.action_low, max=self.action_high)
 
     def get_state_action_value(self, obs: dict, actions: torch.Tensor):
         raise ValueError("PPO Agent has no QNet or Double QNet to compute State-Action Values")
@@ -60,8 +61,8 @@ class RecurrentPPOAgent(RecurrentAgent):
         
         super().__init__(obs_embed_model, backbone_model, actor, critic)
 
-        self.action_low = action_low
-        self.action_high = action_high
+        self.register_buffer("action_low",  torch.as_tensor(action_low,  dtype=torch.float32), persistent=False)
+        self.register_buffer("action_high", torch.as_tensor(action_high, dtype=torch.float32), persistent=False)
 
     def select_action(self, obs: torch.Tensor,
                       lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):

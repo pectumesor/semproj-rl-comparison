@@ -82,3 +82,28 @@ class ReplayBuffer:
                 },
             terminated=self.terminated_buf[batch_idx, env_idx],
         )
+
+
+class FrameStackReplayBuffer(ReplayBuffer):
+    """
+    ReplayBuffer variant for frame-stacked observations: rays/proprio carry an
+    extra stack-size dim right after num_envs, i.e. (num_steps, num_envs, stack_size, ...).
+    """
+
+    def __init__(self, ray_dim, proprio_dim, stack_size: int, device, cfg):
+        self.gamma = cfg.env.gamma
+        self.num_steps = cfg.algorithm.num_steps
+        self.num_envs = cfg.env.num_envs
+        self.device = device
+        self.act_dim = cfg.env.act_dim
+
+        self.ptr = 0
+        self.size = 0
+
+        self.rays_buf          = torch.zeros((self.num_steps, self.num_envs, stack_size, *ray_dim),   dtype=torch.float32, device=device)
+        self.proprio_buf       = torch.zeros((self.num_steps, self.num_envs, stack_size, proprio_dim), dtype=torch.float32, device=device)
+        self.act_buf           = torch.zeros((self.num_steps, self.num_envs, self.act_dim), dtype=torch.float32, device=device)
+        self.next_rays_buf     = torch.zeros((self.num_steps, self.num_envs, stack_size, *ray_dim),   dtype=torch.float32, device=device)
+        self.next_proprio_buf  = torch.zeros((self.num_steps, self.num_envs, stack_size, proprio_dim), dtype=torch.float32, device=device)
+        self.rew_buf           = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float32, device=device)
+        self.terminated_buf    = torch.zeros((self.num_steps,  self.num_envs), dtype=torch.bool, device=device)

@@ -25,18 +25,20 @@ def cnn_block(
             input_channels: int,
             output_channels: int,
         ):
-    
+        # 1-D conv over the ray axis (B, C, num_rays). Rays span a limited FOV, so the edges
+        # are not neighbours -> zero padding, not circular.
+        # GroupNorm(1, C) == LayerNorm over (C, num_rays) per sample: unlike BatchNorm it does not
+        # depend on batch composition or train/eval mode, so rollout and update log-probs match.
         return [
-            
-            nn.Conv2d(in_channels=input_channels, out_channels=output_channels, kernel_size=3, padding=1, padding_mode='circular'),
-            nn.BatchNorm2d(output_channels),
+            nn.Conv1d(in_channels=input_channels, out_channels=output_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(1, output_channels),
             nn.ReLU(),
 
-            nn.Conv2d(in_channels=output_channels, out_channels=output_channels, kernel_size=3, padding=1, padding_mode='circular'),
-            nn.BatchNorm2d(output_channels),
+            nn.Conv1d(in_channels=output_channels, out_channels=output_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(1, output_channels),
             nn.ReLU(),
 
-            nn.MaxPool2d(kernel_size=2)
+            nn.MaxPool1d(kernel_size=2)
       ]
 
 def build_cnn(

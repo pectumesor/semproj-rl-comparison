@@ -3,6 +3,7 @@ import torch.nn as nn
 from typing import Optional, Tuple
 from ..heads import GuassianPolicyHead
 from ..backbones import SimpleLSTM
+from ..embeddings.frame_stack import FrameStackMLP, FrameStackCNN
 import torch.optim as optim
 from pathlib import Path
 
@@ -18,9 +19,17 @@ class RecurrentAgent(nn.Module):
 
     def forward(self, obs,
                 lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
-        
-        rays = obs['rays'].reshape(-1, *obs['rays'].shape[-2:])
-        proprio = obs['proprio'].reshape(-1, obs['proprio'].shape[-1])
+
+        # Non-stacked rays/proprio carry only (..., C, R) / (..., proprio_dim) trailing dims.
+        # Frame-stacked obs carry an extra stack-size dim: (..., F, C, R) / (..., F, proprio_dim).
+        # Either way, flatten every leading dim (time window, envs, ...) into one batch dim
+        # while keeping the dims the observation embedding model actually consumes intact.
+        frame_stacked = isinstance(self.obs_embed_model, (FrameStackMLP, FrameStackCNN))
+        rays_dims = 3 if frame_stacked else 2
+        proprio_dims = 2 if frame_stacked else 1
+
+        rays = obs['rays'].reshape(-1, *obs['rays'].shape[-rays_dims:])
+        proprio = obs['proprio'].reshape(-1, *obs['proprio'].shape[-proprio_dims:])
         obs_feat = self.obs_embed_model(rays, proprio)
 
         hidden, new_lstm_state = self.backbone_model(obs_feat, lstm_state, done)

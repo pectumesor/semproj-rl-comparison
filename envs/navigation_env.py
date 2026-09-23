@@ -122,11 +122,13 @@ class NavigationEnv(gym.Env):
         """
 
         self.action_space = gym.spaces.Box(
-            low=cfg.env.action_low,
-            high=cfg.env.action_high,
+            low=np.asarray(cfg.env.action_low, dtype=np.float32),
+            high=np.asarray(cfg.env.action_high, dtype=np.float32),
             dtype=np.float32,
             shape=(self.act_dim,)
         )
+        self._action_low  = torch.as_tensor(self.action_space.low,  device=device)
+        self._action_high = torch.as_tensor(self.action_space.high, device=device)
 
     def compute_reward(self, terminated):
         reward = torch.full(
@@ -170,6 +172,9 @@ class NavigationEnv(gym.Env):
         self.steps += 1
         truncated = self.steps >= self.max_steps
         self.steps[truncated] = 0
+
+        # Enforce per-dimension bounds here too, so no caller (e.g. SAC warm start) can walk backwards
+        action = action.clamp(min=self._action_low, max=self._action_high)
 
         turning = action[:, 0] * self._half_fov_rad
         speed   = action[:, 1] * self.max_speed
@@ -319,13 +324,14 @@ class NavigationEnv(gym.Env):
         frame = np.transpose(pygame.surfarray.array3d(self._rec_screen), (1,0,2))
         return frame
 
-    def record_rollout(self, type, agent, steps, cfg: DictConfig):
-        if type == "lstm":
+    def record_rollout(self, backbone_type, agent, steps, cfg: DictConfig):
+        if backbone_type == "lstm":
             return self.record_recurrent_rollout(agent, cfg.backbone.lstm_num_layers,
                                                   cfg.backbone.lstm_backbone_feature_dim, steps)
         else:
             return self.record_mlp_rollout(agent, steps)
 
+    @torch.inference_mode()
     def record_mlp_rollout(self, agent, steps):
 
         frames = []
@@ -339,7 +345,8 @@ class NavigationEnv(gym.Env):
                 obs, _ = self.reset()
 
         return frames
-    
+
+    @torch.inference_mode()
     def record_recurrent_rollout(self, agent, num_layers, hidden_size, steps):
 
         frames = []

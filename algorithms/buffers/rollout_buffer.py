@@ -138,6 +138,48 @@ class RecurrentRolloutBuffer(RolloutBuffer):
 
         return recurrent_batch
 
+class FrameStackRolloutBuffer(RolloutBuffer):
+    """
+    RolloutBuffer variant for frame-stacked observations: rays/proprio carry an
+    extra stack-size dim right after num_envs, i.e. (num_steps, num_envs, stack_size, ...).
+    """
+
+    def __init__(self, ray_dim, proprio_dim, stack_size: int, device, cfg):
+        self.act_dim    = cfg.env.act_dim
+        self.gamma      = cfg.env.gamma
+        self.gae_lambda = cfg.algorithm.gae_lambda
+        self.num_steps  = cfg.algorithm.num_steps
+        self.num_envs   = cfg.env.num_envs
+        self.device     = device
+        self.ptr        = 0
+
+        self.rays_buf     = torch.zeros((self.num_steps, self.num_envs, stack_size, *ray_dim),    dtype=torch.float, device=device)
+        self.proprio_buf  = torch.zeros((self.num_steps, self.num_envs, stack_size, proprio_dim),  dtype=torch.float, device=device)
+        self.act_buf      = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.logp_buf     = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.mu_buf       = torch.zeros((self.num_steps, self.num_envs, self.act_dim),    dtype=torch.float, device=device)
+        self.std_buf      = torch.zeros((self.num_steps, self.num_envs, self.act_dim),   dtype=torch.float, device=device)
+        self.val_buf      = torch.zeros((self.num_steps, self.num_envs),                  dtype=torch.float, device=device)
+        self.done_buf      = torch.zeros((self.num_steps, self.num_envs),                 dtype=torch.bool,  device=device)
+        self.rew_buf       = torch.zeros((self.num_steps, self.num_envs),                 dtype=torch.float, device=device)
+        self.ret_buf       = torch.zeros((self.num_steps, self.num_envs),                 dtype=torch.float, device=device)
+        self.adv_buf       = torch.zeros((self.num_steps, self.num_envs),                 dtype=torch.float, device=device)
+        self.ep_start_buf  = torch.zeros((self.num_steps, self.num_envs),                 dtype=torch.bool,  device=device)
+
+class FrameStackRecurrentRolloutBuffer(RecurrentRolloutBuffer):
+    """RecurrentRolloutBuffer variant that stores frame-stacked rays/proprio."""
+
+    def __init__(self, ray_dim, proprio_dim, stack_size: int, device, cfg):
+        FrameStackRolloutBuffer.__init__(self, ray_dim, proprio_dim, stack_size, device, cfg)
+
+        hidden_state_shape = (self.num_steps, cfg.backbone.lstm_num_layers,
+                              self.num_envs, cfg.backbone.lstm_backbone_feature_dim)
+
+        self.hidden_states_buf  = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
+        self.cell_states_buf    = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
+
+        self.recurrent_ptr = 0
+
 
 
 

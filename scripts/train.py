@@ -12,11 +12,10 @@ sys.path.append(str(ROOT_DIR))
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
-from gymnasium.wrappers import FrameStackObservation
 
 from utils import (create_ppo_agent, evaluate_model_on_metrics,
-save_video, create_buffer, create_algorithm)
-from envs import (NavigationEnv, compute_num_rays)
+save_video, create_buffer, create_algorithm, create_environment)
+from envs import (NavigationEnv, FrameStackWrapper, compute_num_rays)
 
 
 import torch
@@ -69,14 +68,10 @@ def main(cfg: DictConfig):
 
         agent = create_ppo_agent(ray_dim= ray_dim, cfg=cfg).to(device)
 
-        env   = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=ray_dim,
-                                           num_envs=cfg.env.num_envs, device=device)
-        eval_env = NavigationEnv(cfg=cfg, agent=agent, num_rays=num_rays,
-                                     obs_dim=ray_dim, num_envs=cfg.env.num_eval_envs, device=device)
-
-        if frame_stack:
-            env = FrameStackObservation(env, stack_size=cfg.observation.frame_stack.size)
-            eval_env = FrameStackObservation(eval_env, stack_size=cfg.observation.frame_stack.size)
+        env      = create_environment(cfg=cfg, agent=agent, num_rays=num_rays, ray_dim=ray_dim,
+                                      num_envs=cfg.env.num_envs, device=device)
+        eval_env = create_environment(cfg=cfg, agent=agent, num_rays=num_rays, ray_dim=ray_dim,
+                                      num_envs=cfg.env.num_eval_envs, device=device)
 
         buffer = create_buffer(backbone_type=cfg.backbone.name, algorithm_name=cfg.algorithm.name,
                                ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim,
@@ -86,28 +81,30 @@ def main(cfg: DictConfig):
                                      buffer=buffer, device=device, env=env, eval_env=eval_env, agent=agent)
 
         algorithm.train(run_dir=run_dir)
-        
+
         agent.load_model(run_dir / f"best.pt", device, algorithm.optimizer)
         agent.eval()
 
-        # --- Custom PPO rollout + video ---
-        render_env = NavigationEnv(cfg, agent, num_rays, ray_dim, 1, device=device)
-        frames = render_env.record_rollout(cfg.backbone.name, agent, 200, cfg)
+        # --- Rollout + video ---
+        render_env = create_environment(cfg=cfg, agent=agent, num_rays=num_rays,
+                                        ray_dim=ray_dim, num_envs=1, device=device)
+        with torch.no_grad():
+            frames = render_env.record_rollout(cfg.backbone.name, agent, 200, cfg)
         custom_video_path = run_dir / "videos" / f"{trial_name}.mp4"
         save_video(frames, custom_video_path)
 
         wandb.log({
-                    f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
-                })
-
+                        f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
+                    })
+          
         # Evaluate metrics on a fixed starting and ending goal
-        env.random_pos_flag = False
+        """env.unwrapped.random_pos_flag = False
 
         evaluate_model_on_metrics(agent=agent, env=env,
                                         episodes=cfg.env.completion_rate_eps,
                                         nr_runs=cfg.env.mean_of_means_runs,
                                         json_path=cfg.env.room_path,
                                         backbone_type=cfg.backbone.name)
-        
+        """
 if __name__ == "__main__":
     main()

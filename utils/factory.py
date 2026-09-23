@@ -3,7 +3,8 @@ from models import (MLPObservationEmbeddings, CNNObservationEmbeddings,
                       SquashedGaussianPolicyHead, DoubleQNet, SACAgent, RecurrentPPOAgent,
                       FrameStackMLP, FrameStackCNN)
 
-from algorithms import MLPPPO, RecurrentPPO, MLPSAC, RolloutBuffer, ReplayBuffer, RecurrentRolloutBuffer
+from algorithms import (MLPPPO, RecurrentPPO, MLPSAC, RolloutBuffer, ReplayBuffer, RecurrentRolloutBuffer,
+                        FrameStackRolloutBuffer, FrameStackRecurrentRolloutBuffer, FrameStackReplayBuffer)
 
 from omegaconf import DictConfig
 from stable_baselines3 import PPO, SAC
@@ -15,22 +16,46 @@ import torch
 
 def create_observation_model(frame_stack: bool, observation_type: str, ray_dim: tuple, cfg: DictConfig):
     if frame_stack:
+        if observation_type == "mlp":
+            return FrameStackMLP(
+                input_dim=np.prod(ray_dim) + cfg.env.proprio_dim,
+                stack_depth=cfg.observation.frame_stack.size,
+                hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
+                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
+                )
+        else:
 
+            return FrameStackCNN(stack_depth=cfg.observation.frame_stack.size,
+                                ray_channels=cfg.env.ray_encoding,
+                                cnn_out_channels=cfg.observation.cnn_output_channels,
+                                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
+                                        )
+    else:
         if observation_type == "mlp":
             return MLPObservationEmbeddings(
                 input_dim=np.prod(ray_dim) + cfg.env.proprio_dim,
                 hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
-                feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
-                )
-        elif observation_type == "cnn":
-
+                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
+            )
+        else:
             return CNNObservationEmbeddings(ray_channels=cfg.env.ray_encoding,
                                         cnn_out_channels=cfg.observation.cnn_output_channels,
                                         proprio_dim=cfg.env.proprio_dim,
                                         proprio_hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
-                                        feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                                        out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
                                         )
     
+def create_environment(cfg: DictConfig, agent, num_rays: int, ray_dim: tuple, num_envs: int, device: str = "cpu"):
+    from envs import NavigationEnv, NavigationEnvEasy, FrameStackWrapper  # deferred: envs -> utils.geometry -> utils -> models is circular at module scope
+
+    env_cls = NavigationEnvEasy if cfg.env.name == "NavEnvEasy" else NavigationEnv
+    env = env_cls(cfg=cfg, agent=agent, num_rays=num_rays, obs_dim=ray_dim, num_envs=num_envs, device=device)
+
+    if cfg.observation.frame_stack.enabled:
+        env = FrameStackWrapper(env, stack_size=cfg.observation.frame_stack.size)
+
+    return env
+
 def create_backbone_model(backbone_type: str, cfg: DictConfig):
 
     if backbone_type == "mlp":
@@ -72,7 +97,7 @@ def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
                                                  cfg=cfg
                                                 )
 
-    backbone_model = create_backbone_model(backbone_type=backbone_type,
+    backbone_model = create_backbone_model(backbone_type=cfg.backbone.name,
                                            cfg=cfg)
 
     actor = GuassianPolicyHead(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
@@ -82,7 +107,7 @@ def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
     critic = ValueNet(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
                      hidden_sizes=cfg.head.value_hidden_sizes)
     
-    if backbone_type == "mlp":
+    if cfg.backbone.name == "mlp":
         return PPOAgent(obs_embed_model= observation_model,
                         backbone_model= backbone_model,
                         actor=actor, critic=critic,
@@ -113,7 +138,8 @@ def create_sac_agent(observation_type: str, ray_dim:int, cfg: DictConfig):
         
     return SACAgent(obs_embed_model=observation_model,
                     backbone_model=backbone_model,
-                    actor=actor, critic=critic)
+                    actor=actor, critic=critic,
+                    action_low=cfg.env.action_low, action_high=cfg.env.action_high)
 
 def create_sb3_ppo_agent(backbone_type: str, cfg: DictConfig, ray_dim: int, env, tensorboard_log: str = None):
 
@@ -235,14 +261,23 @@ def create_algorithm(cfg: DictConfig, algorithm_name: str, backbone_type: str, b
                                      buffer=buffer, device=device, env=env, eval_env=eval_env,
                                     agent=agent, cfg=cfg)
 
-def create_buffer(backbone_type: str, algorithm_name:str, 
+def create_buffer(backbone_type: str, algorithm_name:str,
                   ray_dim: tuple, proprio_dim: int, device: torch.device, cfg: DictConfig):
+
+    frame_stack = cfg.observation.frame_stack.enabled
+    stack_size  = cfg.observation.frame_stack.size
 
     if algorithm_name == "ppo":
         if backbone_type == "mlp":
+            if frame_stack:
+                return FrameStackRolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, stack_size=stack_size, device=device, cfg=cfg)
             return RolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device,cfg=cfg)
         else:
+            if frame_stack:
+                return FrameStackRecurrentRolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, stack_size=stack_size, device=device, cfg=cfg)
             return RecurrentRolloutBuffer(ray_dim=ray_dim, proprio_dim=proprio_dim, device=device, cfg=cfg)
     else:
+        if frame_stack:
+            return FrameStackReplayBuffer(ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim, stack_size=stack_size, device=device, cfg=cfg)
         return ReplayBuffer(ray_dim=ray_dim, proprio_dim=cfg.env.proprio_dim, device=device, cfg=cfg)
 

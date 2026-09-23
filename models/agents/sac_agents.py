@@ -10,18 +10,28 @@ class SACAgent(BaseAgent):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: nn.Module,
                  actor: GuassianPolicyHead | SquashedGaussianPolicyHead,
-                 critic: DoubleQNet | ValueNet):
+                 critic: DoubleQNet | ValueNet,
+                 action_low, action_high):
         super().__init__(obs_embed_model, backbone_model, actor, critic)
-    
+
+        # tanh squashes to [-1, 1]; an affine map a = center + scale * tanh(u) moves it into the
+        # per-dimension env bounds (e.g. forward speed in [0, 1]) instead of clipping half the range away
+        action_low  = torch.as_tensor(action_low,  dtype=torch.float32)
+        action_high = torch.as_tensor(action_high, dtype=torch.float32)
+        self.register_buffer("action_scale",  (action_high - action_low) / 2.0, persistent=False)
+        self.register_buffer("action_center", (action_high + action_low) / 2.0, persistent=False)
+
     def sample_action(self, obs: torch.Tensor):
 
         h = self.forward(obs)
         action, action_log_prob = self.actor.act(h)
-        return action, action_log_prob
-  
+        # Change of variables for the affine rescale: log p(a') = log p(a) - sum log(scale)
+        action_log_prob = action_log_prob - torch.log(self.action_scale).sum()
+        return self.action_center + self.action_scale * action, action_log_prob
+
     def predict_action(self, obs: dict):
         h = self.forward(obs)
-        return self.actor.act_inference(h)
+        return self.action_center + self.action_scale * self.actor.act_inference(h)
 
     def get_value(self, obs: dict):
          raise ValueError("SAC Agent has no Value Net to compute State Values")

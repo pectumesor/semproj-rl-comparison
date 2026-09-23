@@ -145,8 +145,9 @@ class MLPPPO(PPO):
         total_samples = self.buffer.num_steps * self.buffer.num_envs
 
         # rays: (T, E, C, R) → (T*E, C, R); proprio: (T, E, 4) → (T*E, 4)
+        # (with frame stacking, an extra stack-size dim rides along after E and is kept intact)
         flat_rays    = batch.rays.reshape(total_samples, *batch.rays.shape[2:])
-        flat_proprio = batch.proprio.reshape(total_samples, -1)
+        flat_proprio = batch.proprio.reshape(total_samples, *batch.proprio.shape[2:])
         flat_act     = batch.act.reshape(total_samples, -1)
         flat_logp    = batch.logp.reshape(total_samples)
         flat_mu      = batch.mu.reshape(total_samples, -1)

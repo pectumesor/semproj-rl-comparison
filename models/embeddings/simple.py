@@ -11,9 +11,9 @@ class MLPObservationEmbeddings(nn.Module):
     input_dim must equal 7 * num_rays + proprio_dim (4).
     """
 
-    def __init__(self, input_dim: int, hidden_sizes: Sequence[int], feature_dim: int):
+    def __init__(self, input_dim: int, hidden_sizes: Sequence[int], out_feature_dim: int):
         super().__init__()
-        self.net = build_mlp(input_dim, hidden_sizes, feature_dim)
+        self.net = build_mlp(input_dim, hidden_sizes, out_feature_dim)
 
     def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
         # rays:   (B, num_channels, num_rays)
@@ -43,12 +43,12 @@ class CNNObservationEmbeddings(nn.Module):
         cnn_out_channels: int,
         proprio_dim: int,
         proprio_hidden_sizes: Sequence[int],
-        feature_dim: int,
+        out_feature_dim: int,
     ):
         super().__init__()
         self.cnn        = build_cnn1d(ray_channels, cnn_out_channels)
         self.proprio_net = build_mlp(proprio_dim, proprio_hidden_sizes, proprio_hidden_sizes[-1])
-        self.fusion      = nn.Linear(cnn_out_channels + proprio_hidden_sizes[-1], feature_dim)
+        self.fusion      = nn.Linear(cnn_out_channels + proprio_hidden_sizes[-1], out_feature_dim)
 
     def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
         # rays:    (B, ray_channels, num_rays)

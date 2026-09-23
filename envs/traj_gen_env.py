@@ -88,8 +88,8 @@ class TrajGenEnv(gym.Env):
         """
 
         self.action_space = gym.spaces.Box(
-            low=cfg.env.action_low,
-            high=cfg.env.action_high,
+            low=np.asarray(cfg.env.action_low, dtype=np.float32),
+            high=np.asarray(cfg.env.action_high, dtype=np.float32),
             dtype=np.float32,
             shape=(self.act_dim,)
         )

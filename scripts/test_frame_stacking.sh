@@ -41,7 +41,8 @@ python scripts/train.py --multirun \
     env.goal_radius=16 \
     wandb.group=frame_stack_test \
     seed=0,1,2,3,4 \
-    observation=mlp_observation, cnn_observation \
+    observation=mlp_observation,cnn_observation \
+    backbone=mlp_backbone,lstm_backbone \
     observation.frame_stack.enabled=True \
  
     

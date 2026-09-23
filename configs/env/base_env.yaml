@@ -3,8 +3,9 @@ room_path: "rooms/test_room.json"
 
 num_classes: 3
 act_dim: 2
-action_low: -1
-action_high: 1
+# Per-dimension bounds: [turning, forward speed]. Speed >= 0 so the agent can't walk backwards.
+action_low: [-1.0, 0.0]
+action_high: [1.0, 1.0]
 
 max_speed: 13.0
 range_type: diagonal 

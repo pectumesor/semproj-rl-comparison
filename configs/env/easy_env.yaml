@@ -2,5 +2,8 @@ defaults:
   - base_env
   - _self_
 
+# name drives factory.create_environment's choice of NavigationEnv vs NavigationEnvEasy
+name: "NavEnvEasy"
+
 # NavigationEnvEasy adds 2 extra proprioceptive observations on top of the base env
 proprio_dim: 4

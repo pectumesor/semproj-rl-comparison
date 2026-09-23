@@ -4,11 +4,123 @@ import numpy as np
 import torch
 import pygame
 import imageio.v3 as iio
+from omegaconf import DictConfig
 from .navigation_env import NavigationEnvEasy, NavigationEnv
 from models.embeddings.simple import MLPObservationEmbeddings
 from models.backbones.mlp_backbone import MLPBackbone
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from utils.geometry import w2s
+
+
+class FrameStackWrapper(gym.Wrapper):
+    """
+    Stacks the last `stack_size` observations along a new axis placed right after
+    num_envs, i.e. rays: (num_envs, stack_size, C, R), proprio: (num_envs, stack_size, P).
+
+    gymnasium's built-in FrameStackObservation doesn't fit here: NavigationEnv is
+    already batched over num_envs (every obs/action carries a leading num_envs dim
+    that isn't reflected in its single-instance observation_space), returns torch
+    tensors instead of numpy, and its reset() takes a `done` mask to reset only
+    the finished sub-envs rather than gymnasium's per-episode autoreset. This wrapper
+    mirrors that batched-torch, done-masked-reset API instead of gymnasium's.
+    """
+
+    def __init__(self, env, stack_size: int):
+        super().__init__(env)
+
+        self.stack_size = stack_size
+        self.num_envs = env.num_envs
+        self.device = env.device
+        self._stack = None
+
+        self.observation_space = gym.spaces.Dict({
+            key: gym.spaces.Box(space.low.min(), space.high.max(),
+                                shape=(stack_size, *space.shape), dtype=space.dtype)
+            for key, space in env.observation_space.spaces.items()
+        })
+
+    def _allocate_stack(self, raw_obs: dict):
+        self._stack = {
+            key: torch.zeros(self.num_envs, self.stack_size, *val.shape[1:],
+                             dtype=val.dtype, device=val.device)
+            for key, val in raw_obs.items()
+        }
+
+    def reset(self, seed=None, options=None, done: torch.Tensor = None):
+        mask = (torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+                if done is None else done)
+
+        raw_obs, info = self.env.reset(seed=seed, options=options, done=done)
+
+        if self._stack is None:
+            self._allocate_stack(raw_obs)
+
+        for key, val in raw_obs.items():
+            fresh = val[mask].unsqueeze(1).expand(-1, self.stack_size, *val.shape[1:])
+            self._stack[key][mask] = fresh
+
+        return {key: val.clone() for key, val in self._stack.items()}, info
+
+    def step(self, action: torch.Tensor):
+        raw_obs, reward, terminated, truncated, info = self.env.step(action)
+
+        for key, val in raw_obs.items():
+            self._stack[key] = torch.cat([self._stack[key][:, 1:], val.unsqueeze(1)], dim=1)
+
+        return {key: val.clone() for key, val in self._stack.items()}, reward, terminated, truncated, info
+
+    def record_rollout(self, backbone_type, agent, steps, cfg: DictConfig):
+        if backbone_type == "lstm":
+            return self.record_recurrent_rollout(agent, cfg.backbone.lstm_num_layers,
+                                                  cfg.backbone.lstm_backbone_feature_dim, steps)
+        else:
+            return self.record_mlp_rollout(agent, steps)
+        
+    @torch.inference_mode()
+    def record_mlp_rollout(self, agent, steps):
+
+        frames = []
+        obs, _ = self.reset()
+        for _ in range(steps):
+            action = agent.predict_action(obs)
+            obs, _, done, _, _ = self.step(action)
+            last_ray = obs["rays"][:, -1]
+            last_proprio = obs["proprio"][:, -1]
+            record_obs = {"rays": last_ray,
+                          "proprio": last_proprio}
+            
+            frames.append(self.env.record_frame(record_obs))
+
+            if done.any():
+                obs, _ = self.reset()
+
+        return frames
+    
+    @torch.inference_mode()
+    def record_recurrent_rollout(self, agent, num_layers, hidden_size, steps):
+
+        frames = []
+        lstm_state = (
+            torch.zeros((num_layers, 1, hidden_size),
+                        dtype=torch.float, device=self.device),
+            torch.zeros((num_layers, 1, hidden_size),
+                         dtype=torch.float, device=self.device)
+            )
+        done = torch.zeros(1, dtype=torch.bool, device=self.device)
+        obs, _ = self.reset()
+        for _ in range(steps):
+            action, lstm_state = agent.predict_action(obs, lstm_state, done)
+            obs, _, done, _, _ = self.step(action)
+            last_ray = obs["rays"][:, -1]
+            last_proprio = obs["proprio"][:, -1]
+            record_obs = {"rays": last_ray,
+                          "proprio": last_proprio}
+            frames.append(self.env.record_frame(record_obs))
+
+            if done.any():
+                obs, _ = self.reset()
+
+        return frames
 
 
 class NavigationEnvSB3(gym.Env):
@@ -26,7 +138,8 @@ class NavigationEnvSB3(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(flat_dim,), dtype=np.float32)
         self.action_space = gym.spaces.Box(
-            low=np.array([-1.0, -1.0]), high=np.array([1.0, 1.0]), dtype=np.float32)
+            low=np.asarray(cfg.env.action_low, dtype=np.float32),
+            high=np.asarray(cfg.env.action_high, dtype=np.float32), dtype=np.float32)
 
     def _flatten_obs(self, obs: dict) -> np.ndarray:
         rays   = obs["rays"][0].cpu().numpy().flatten()   # (C*R,)
