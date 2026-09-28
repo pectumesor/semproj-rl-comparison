@@ -39,7 +39,7 @@ python scripts/train.py --multirun \
     hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
     env.room_path="rooms/four_room.json" \
     env.goal_radius=16 \
-    wandb.group=frame_stack_test \
+    wandb.group=frame_stack_test_v2 \
     seed=0,1,2,3,4 \
     observation=mlp_observation,cnn_observation \
     backbone=mlp_backbone,lstm_backbone \
