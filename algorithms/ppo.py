@@ -468,13 +468,15 @@ class RecurrentPPO(MLPPPO):
  
     def collect_rollout(self, obs: torch.Tensor, lstm_state: Tuple[torch.Tensor, torch.Tensor],
                          done: torch.Tensor, episode_starts: torch.Tensor):
-    
+        
         with torch.no_grad():
             for _ in range(self.buffer.num_steps):
 
                 new_obs, _ = self.env.reset(done=done)
                 obs["rays"][done]    = new_obs["rays"][done]
                 obs["proprio"][done] = new_obs["proprio"][done]
+
+                # Auxiliary Loss: Reset trajectories here
 
                 # Store incoming state to rollout buffer
                 in_lstm_state = lstm_state

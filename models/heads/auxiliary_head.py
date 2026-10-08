@@ -6,26 +6,21 @@ import torch.nn as nn
 
 class DepthHead(nn.Module):
     """
-    Head for the auxiliary tasks of predicting depth of images
+    Head for the auxiliary tasks of predicting depth of the ray cast
 
     Arg:
         feature_dim: Dimension of the input features: (B, feature_dim)
         hidden_sizes: Sizes of the intermediate features
-        Output_dim: Dimension of the depth prediction map: (B, H, W)
+        Output_dim: Dimension of the depth prediction map: (B, num_rays) 
     """
 
-    def __init__(self, feature_dim: int, hidden_sizes: Sequence[int], output_dim: Sequence[int]):
+    def __init__(self, feature_dim: int, hidden_sizes: Sequence[int], output_dim: int):
         super().__init__()
 
-        H,W = output_dim
-        self.backbone = build_mlp(feature_dim, hidden_sizes, H)
-        self.depth_map = nn.Conv2d(in_channels=1, out_channels=W, kernel_size=1)
+        self.model = build_mlp(feature_dim, hidden_sizes, output_dim)
 
     def forward(self, backbone_features: torch.Tensor) -> torch.Tensor:
-
-        h = self.backbone(backbone_features)
-        h = h.unsqueeze(-1)
-        return self.depth_map(h)
+        return self.model(backbone_features)
     
 class LoopClosureHead(nn.Module):
     """

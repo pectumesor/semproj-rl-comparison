@@ -176,3 +176,16 @@ class PerlinColor:
         chans = [self._fbm(p, x, y) for p in self.perms]   # 3 × (E, R)
         rgb = torch.stack(chans, dim=-1)                   # (E, R, 3)
         return (rgb + 1.0) * 0.5                            # → [0, 1]
+
+class LoopLabeler:
+    def __init__(self, num_envs, eta1, eta2):
+        self.eta1 = eta1
+        self.eta2 = eta2
+        self.num_envs = num_envs
+
+        self.trajectories = [[] for _ in range(num_envs)]
+
+    
+    def reset_traj(self, episode_starts):
+
+        self.trajectories[episode_starts] = [[]]

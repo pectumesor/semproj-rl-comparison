@@ -1,5 +1,5 @@
 """
-Compare my own PPO implementation with Stable Baselines
+Training script for the whole ablation
 
 """
 import sys
@@ -58,7 +58,7 @@ def main(cfg: DictConfig):
                         sync_tensorboard=True, reinit=True, mode=cfg.wandb.mode):
 
         trial_name = wandb.run.name
-        log_dir = ROOT_DIR / "logs" / f"{trial_name}"
+        log_dir = ROOT_DIR / "logs" / f"{trial_name}__{Path(cfg.env.room_path).stem}"
         run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
         run_dir = log_dir / run_name
         

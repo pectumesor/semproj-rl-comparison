@@ -110,6 +110,7 @@ class RecurrentRolloutBuffer(RolloutBuffer):
 
         self.hidden_states_buf  = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
         self.cell_states_buf    = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
+        self.loopclo_buf        = torch.zeroes((self.num_steps, self.num_envs), dtype=torch.float, device=self.device)
 
         self.recurrent_ptr = 0
 

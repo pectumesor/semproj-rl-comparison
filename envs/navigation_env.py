@@ -101,6 +101,7 @@ class NavigationEnv(gym.Env):
         self.last_speed   = torch.zeros(num_envs, dtype=torch.float32, device=device)
         self.last_turning = torch.zeros(num_envs, dtype=torch.float32, device=device)
 
+       
         # Dict observation space: structured ray matrix + flat proprio vector
         self.observation_space = gym.spaces.Dict({
             "rays":    gym.spaces.Box(0.0, 1.0,  shape=self.obs_dim, dtype=np.float32),
@@ -129,6 +130,8 @@ class NavigationEnv(gym.Env):
         )
         self._action_low  = torch.as_tensor(self.action_space.low,  device=device)
         self._action_high = torch.as_tensor(self.action_space.high, device=device)
+
+
 
     def compute_reward(self, terminated):
         reward = torch.full(
