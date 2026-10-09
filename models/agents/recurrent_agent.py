@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
-from ..heads import GuassianPolicyHead
+from ..heads import GuassianPolicyHead, DepthHead, LoopClosureHead
 from ..backbones import SimpleLSTM
 from ..embeddings.frame_stack import FrameStackMLP, FrameStackCNN
 import torch.optim as optim
@@ -20,6 +20,11 @@ class RecurrentAgent(nn.Module):
     def forward(self, obs,
                 lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
 
+        obs_feat = self.embed_obs(obs)
+        hidden, new_lstm_state = self.backbone_model(obs_feat, lstm_state, done)
+        return hidden, new_lstm_state
+
+    def embed_obs(self, obs) -> torch.Tensor:
         # Non-stacked rays/proprio carry only (..., C, R) / (..., proprio_dim) trailing dims.
         # Frame-stacked obs carry an extra stack-size dim: (..., F, C, R) / (..., F, proprio_dim).
         # Either way, flatten every leading dim (time window, envs, ...) into one batch dim
@@ -30,10 +35,7 @@ class RecurrentAgent(nn.Module):
 
         rays = obs['rays'].reshape(-1, *obs['rays'].shape[-rays_dims:])
         proprio = obs['proprio'].reshape(-1, *obs['proprio'].shape[-proprio_dims:])
-        obs_feat = self.obs_embed_model(rays, proprio)
-
-        hidden, new_lstm_state = self.backbone_model(obs_feat, lstm_state, done)
-        return hidden, new_lstm_state
+        return self.obs_embed_model(rays, proprio)
     
     def select_action(self, obs: torch.Tensor, 
                       lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
@@ -61,18 +63,18 @@ class RecurrentAgent(nn.Module):
                         lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor,
                         actions: torch.Tensor):
         
-        h, _ = self.forward(obs,
+        hidden, _ = self.forward(obs,
                               (lstm_state[0], lstm_state[1]),
                               done)
         
-        self.actor.update_distribution(h)
+        self.actor.update_distribution(hidden)
         logp = self.actor.log_prob_action(actions)
         mu = self.actor.action_mean
         std = self.actor.action_std
         entropy = self.actor.entropy
-        val = self.critic(h).squeeze(-1)
+        val = self.critic(hidden).squeeze(-1)
 
-        return logp, mu, std, entropy, val
+        return logp, mu, std, entropy, val, hidden
 
     def save_model(self, path, optimizer: optim.Optimizer):
 
@@ -97,3 +99,18 @@ class RecurrentAgent(nn.Module):
         self.actor.load_state_dict(checkpoint["actor"])
         self.critic.load_state_dict(checkpoint["critic"])
         optimizer.load_state_dict(checkpoint["optimizer"])
+
+class RecurrentAgentAuxiliaryHead(RecurrentAgent):
+
+    def __init__(self, depth_head: DepthHead, loop_closure_head: LoopClosureHead, **kwargs):
+        super().__init__(**kwargs)
+
+        self.depth_head = depth_head
+        self.loop_closure_head = loop_closure_head
+
+    def depth_forward(self, backbone_features: torch.Tensor):
+        return self.depth_head(backbone_features)
+
+    def loop_closure_forward(self, backbone_features: torch.Tensor):
+        return self.loop_closure_head(backbone_features)
+

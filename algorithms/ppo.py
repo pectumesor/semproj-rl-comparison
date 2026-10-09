@@ -10,9 +10,11 @@ from .buffers.rollout_buffer import RolloutBatch, RolloutBuffer, RecurrentRollou
 import torch.optim as optim
 import gymnasium as gym
 from tqdm import tqdm
+import torch.nn.functional as F
 
 from models.agents import PPOAgent, RecurrentPPOAgent
 from .early_stopping import ConvergenceMonitor
+from envs import LoopLabeler
 
 @dataclass
 class PPOUpdateStats:
@@ -452,9 +454,22 @@ class MLPPPO(PPO):
                 break
 
 class RecurrentPPO(MLPPPO):
-    def __init__(self, num_layers: int, hidden_size: int, minibatch_size: int, bptt_window: int,
+    def __init__(self, num_layers: int, hidden_size: int, minibatch_size: int, bptt_window: int,  cfg: DictConfig,
                   **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(cfg=cfg, **kwargs)
+
+        self.loop_labeler = None
+        if cfg.head.auxiliary_head.enabled:
+            self.depth_coeff = cfg.head.auxiliary_head.depth_coeff
+            self.loop_closure_coeff = cfg.head.auxiliary_head.loop_closure_coeff
+            # unwrapped: agent_pos / max_steps live on the base NavigationEnv, not on the FrameStackWrapper
+            self.loop_labeler = LoopLabeler(
+                num_envs=self.buffer.num_envs,
+                max_len=self.env.unwrapped.max_steps,
+                eta1=cfg.head.auxiliary_head.eta1,
+                eta2=cfg.head.auxiliary_head.eta2,
+                env=self.env.unwrapped, device=self.device
+            )
 
         self.num_layers = num_layers
         self.hidden_size = hidden_size
@@ -465,7 +480,30 @@ class RecurrentPPO(MLPPPO):
                 f"Current num_envs: {self.buffer.num_envs}, minibatch_size: {minibatch_size}"
             )
         self.mini_batch = minibatch_size
- 
+
+    def compute_aux_loss(self, obs_batch: dict, hidden_features: torch.Tensor,
+                          loop_labels: torch.Tensor):
+        # obs_batch rays: (W, B, C, R) or frame-stacked (W, B, F, C, R)
+        # hidden_features: (W*B, H), time-major. loop_labels: (W, B)
+        # Returns the depth and loop closure losses, unweighted.
+
+        # Depth loss: predict the normalized ray distances from the observation embedding
+        obs_embed_feat = self.agent.embed_obs(obs_batch)                   # (W*B, D)
+        dist_pred = self.agent.depth_forward(obs_embed_feat)               # (W*B, R)
+
+        rays = obs_batch["rays"]
+        if rays.dim() == 5:
+            rays = rays[:, :, -1]  # Frame-stacked: the current frame is the last one in the stack
+        dist_labels = rays[..., 3, :].reshape(-1, rays.shape[-1])          # channel 3: normalized distance
+
+        depth_loss = F.mse_loss(dist_pred, dist_labels)
+
+        # Loop closure loss: predict from the LSTM hidden state whether the current position was already visited
+        loop_pred = self.agent.loop_closure_forward(hidden_features)       # (W*B, 1) logits
+        loop_closure_loss = F.binary_cross_entropy_with_logits(loop_pred.squeeze(-1), loop_labels.reshape(-1))
+
+        return depth_loss, loop_closure_loss
+
     def collect_rollout(self, obs: torch.Tensor, lstm_state: Tuple[torch.Tensor, torch.Tensor],
                          done: torch.Tensor, episode_starts: torch.Tensor):
         
@@ -476,7 +514,12 @@ class RecurrentPPO(MLPPPO):
                 obs["rays"][done]    = new_obs["rays"][done]
                 obs["proprio"][done] = new_obs["proprio"][done]
 
-                # Auxiliary Loss: Reset trajectories here
+                # Auxiliary Loss: Reset trajectories here, then label the current position p_t
+                # (before env.step) so the label matches obs_t and the hidden state computed from it
+                loop_labels = None
+                if self.loop_labeler is not None:
+                    self.loop_labeler.reset_traj(episode_starts)
+                    loop_labels = self.loop_labeler.step() # Check if reached an already seen position before
 
                 # Store incoming state to rollout buffer
                 in_lstm_state = lstm_state
@@ -490,6 +533,7 @@ class RecurrentPPO(MLPPPO):
                 bootstrap_val = self.agent.get_value(next_obs, lstm_state, torch.zeros_like(done))
                 reward += self.gamma * bootstrap_val * truncated.float()
 
+                # fill buffer
                 self.buffer.store(
                     obs=obs,
                     act=action,
@@ -501,7 +545,8 @@ class RecurrentPPO(MLPPPO):
                     rew=reward,
                     ep_starts=episode_starts,
                     hidden_states=in_lstm_state[0],
-                    cell_states=in_lstm_state[1]
+                    cell_states=in_lstm_state[1],
+                    loop_labels=loop_labels
                 )
 
                 obs = next_obs
@@ -544,7 +589,8 @@ class RecurrentPPO(MLPPPO):
                                             ),
                             ep_start = mini_batch.ep_start[w_start:w_end, batch_env_ids],
                             hidden_state = mini_batch.hidden_state[w_start, :, batch_env_ids],
-                            cell_state = mini_batch.cell_state[w_start, :, batch_env_ids]
+                            cell_state = mini_batch.cell_state[w_start, :, batch_env_ids],
+                            loop_labels = mini_batch.loop_labels[w_start:w_end, batch_env_ids]
                             )
                         , batch_env_ids)
 
@@ -590,7 +636,7 @@ class RecurrentPPO(MLPPPO):
             # Normalize advantage
             adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8) 
 
-            logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.agent.evaluate_actions(
+            logp_batch, mu_batch, std_batch, entropy_batch, val_batch, hidden = self.agent.evaluate_actions(
                 obs_batch,
                 (hidden_state_batch, cell_state_batch),
                 episode_start_batch, act_batch
@@ -615,9 +661,15 @@ class RecurrentPPO(MLPPPO):
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
-            intr_loss = self.compute_aux_loss() # TODO: Implement auxiliary heads for this
             task_loss = surrogate_loss + self.val_coeff * value_loss + self.entropy_coeff * entropy_loss
-            loss = self.task_coeff * task_loss + self.intr_coeff * intr_loss
+
+            aux_loss = torch.tensor(0.0, device=self.device)
+            if self.loop_labeler is not None:
+                depth_loss, loop_closure_loss = self.compute_aux_loss(obs_batch, hidden,
+                                                                      bptt_window_batch.loop_labels)
+                aux_loss = self.depth_coeff * depth_loss + self.loop_closure_coeff * loop_closure_loss
+
+            loss = self.task_coeff * task_loss + aux_loss
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -628,7 +680,7 @@ class RecurrentPPO(MLPPPO):
             mean_surrogate_loss += surrogate_loss.item()
             mean_val_loss += value_loss.item()
             mean_entropy += entropy_batch.mean().item()
-            mean_aux_loss += intr_loss.item()
+            mean_aux_loss += aux_loss.item()
             mean_train_rew += ret_batch.mean().item()
             mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1

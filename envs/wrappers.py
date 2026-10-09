@@ -304,35 +304,3 @@ class MyBackbone(BaseFeaturesExtractor):
         proprio   = obs[:, flat_ray_dim:]
         rays = rays_flat.view(obs.shape[0], *self._ray_dim)
         return self.backbone(self.embed(rays, proprio))
-
-class AuxiliaryLossWrapper(NavigationEnv):
-
-    def __init__(self, cfg, agent, num_rays, obs_dim, num_envs, device = "cpu"):
-        super().__init__(cfg, agent, num_rays, obs_dim, num_envs, device)
-
-        self.eta1 = cfg.head.auxiliary_head.eta1
-        self.eta2 = cfg.head.auxiliary_head.eta2
-        self.num_envs = num_envs
-
-        # Trajectory History
-        self.trajectories = [[] for _ in range(num_envs)]
-       
-
-    def reset(self, seed=None, options=None, done: torch.Tensor = None):
-        super().reset(done)
-
-        # Reset Trajectories 
-        self.trajectories[done] = []
-
-
-    def step(self, i, pos):
-
-        
-
-    def get_loop_closure_label(self):
-
-        for i in range(self.num_envs):
-            for j in range(self.idx[i]):
-
-
-

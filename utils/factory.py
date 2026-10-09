@@ -1,7 +1,7 @@
 from models import (MLPObservationEmbeddings, CNNObservationEmbeddings,
                      MLPBackbone, SimpleLSTM, GuassianPolicyHead, ValueNet, PPOAgent,
                       SquashedGaussianPolicyHead, DoubleQNet, SACAgent, RecurrentPPOAgent,
-                      FrameStackMLP, FrameStackCNN)
+                      FrameStackMLP, FrameStackCNN, DepthHead, LoopClosureHead)
 
 from algorithms import (MLPPPO, RecurrentPPO, MLPSAC, RolloutBuffer, ReplayBuffer, RecurrentRolloutBuffer,
                         FrameStackRolloutBuffer, FrameStackRecurrentRolloutBuffer, FrameStackReplayBuffer)
@@ -113,10 +113,21 @@ def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
                         actor=actor, critic=critic,
                         action_low=cfg.env.action_low, action_high=cfg.env.action_high)
     else:
+        depth_head, loop_closure_head = None, None
+        aux_cfg = cfg.head.auxiliary_head
+        if aux_cfg.enabled:
+            # Depth is predicted from the observation embedding, loop closure from the LSTM hidden state
+            depth_head = DepthHead(feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                                   hidden_sizes=aux_cfg.depth_hidden_sizes,
+                                   output_dim=int(ray_dim[-1]))  # one depth value per ray
+            loop_closure_head = LoopClosureHead(feature_dim=cfg.backbone.lstm_backbone_feature_dim,
+                                                hidden_sizes=aux_cfg.loop_closure_hidden_sizes)
+
         return RecurrentPPOAgent(obs_embed_model= observation_model,
                                  backbone_model= backbone_model,
                                  actor=actor, critic=critic,
-                                 action_low=cfg.env.action_low, action_high=cfg.env.action_high)
+                                 action_low=cfg.env.action_low, action_high=cfg.env.action_high,
+                                 depth_head=depth_head, loop_closure_head=loop_closure_head)
 
 def create_sac_agent(observation_type: str, ray_dim:int, cfg: DictConfig):
      

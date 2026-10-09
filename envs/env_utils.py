@@ -178,14 +178,35 @@ class PerlinColor:
         return (rgb + 1.0) * 0.5                            # → [0, 1]
 
 class LoopLabeler:
-    def __init__(self, num_envs, eta1, eta2):
+    def __init__(self, num_envs, max_len, eta1, eta2, env, device):
         self.eta1 = eta1
         self.eta2 = eta2
         self.num_envs = num_envs
+        self.max_len = max_len
+        self.env = env
+        self.device = device
 
-        self.trajectories = [[] for _ in range(num_envs)]
 
+        self.traj = torch.zeros((num_envs,max_len, 2 ), dtype=torch.float, device=device)
+        # Keeps track of the current trajectory length for every environment
+        self.len = torch.zeros(num_envs, dtype=torch.long, device=device) 
+        self.steps = torch.arange(max_len, device=device)
+        self.env_idxs = torch.arange(num_envs, device=device)
     
     def reset_traj(self, episode_starts):
+      self.len[episode_starts] = 0
 
-        self.trajectories[episode_starts] = [[]]
+    def step(self):
+        pos = self.env.agent_pos # (E, 2)
+
+        valid = self.steps[None, :] < self.len[:, None]                  # (E, T)
+        dist = torch.linalg.norm(self.traj - pos[:, None, :], dim=-1)    # (E, T)
+
+        close = (dist < self.eta1) & valid
+        far = (dist > self.eta2) & valid
+        close_seen = torch.cummax(close.int(), dim=1).values.bool()
+        labels = (close_seen & far).any(dim=1).float()
+
+        self.traj[self.env_idxs, self.len.clamp(max=self.max_len - 1)] = pos
+        self.len = (self.len + 1).clamp(max=self.max_len)
+        return labels

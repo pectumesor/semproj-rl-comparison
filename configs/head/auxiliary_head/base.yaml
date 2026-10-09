@@ -1,1 +1,16 @@
 enabled: false
+
+# Auxiliary heads from "Learning to Navigate in Complex Environments" (Mirowski et al., 2017).
+# Paper uses single-layer MLPs with 128 hidden units for both heads.
+depth_hidden_sizes: [128]
+loop_closure_hidden_sizes: [128]
+
+# Loss coefficients (paper: beta_d and beta_l)
+depth_coeff: 1.0
+loop_closure_coeff: 1.0
+
+# Loop closure thresholds, in world units (rooms are ~100 units per cell, agent moves <= max_speed=13 per step).
+# eta1: max distance for two positions to count as the same place
+# eta2: min distance an intermediate position must reach, to rule out trivial loop closures on consecutive steps
+eta1: 20.0
+eta2: 40.0

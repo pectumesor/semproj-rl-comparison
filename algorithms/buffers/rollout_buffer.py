@@ -21,6 +21,7 @@ class RecurrentRolloutBatch:
     ep_start:     torch.Tensor
     hidden_state: torch.Tensor
     cell_state:   torch.Tensor
+    loop_labels:  torch.Tensor
 
 class RolloutBuffer:
     def __init__(
@@ -110,17 +111,21 @@ class RecurrentRolloutBuffer(RolloutBuffer):
 
         self.hidden_states_buf  = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
         self.cell_states_buf    = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
-        self.loopclo_buf        = torch.zeroes((self.num_steps, self.num_envs), dtype=torch.float, device=self.device)
+        self.loopclo_buf        = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float, device=self.device)
 
         self.recurrent_ptr = 0
 
-    def store(self, obs: dict, act, logp, mu, std, val, rew, done, ep_starts, hidden_states, cell_states):
+    def store(self, obs: dict, act, logp, mu, std, val, rew, done, ep_starts,
+               hidden_states, cell_states, loop_labels=None):
 
         super().store(obs, act, logp, mu, std, val, rew, done)
 
         self.ep_start_buf[self.recurrent_ptr] = ep_starts
         self.hidden_states_buf[self.recurrent_ptr] = hidden_states
         self.cell_states_buf[self.recurrent_ptr] = cell_states
+        # Only filled when the auxiliary heads are enabled, otherwise stays at zeros
+        if loop_labels is not None:
+            self.loopclo_buf[self.recurrent_ptr] = loop_labels
 
         self.recurrent_ptr += 1
 
@@ -132,7 +137,8 @@ class RecurrentRolloutBuffer(RolloutBuffer):
             rollout=rollout,
             ep_start=self.ep_start_buf,
             hidden_state=self.hidden_states_buf,
-            cell_state=self.cell_states_buf
+            cell_state=self.cell_states_buf,
+            loop_labels=self.loopclo_buf
         )
 
         self.recurrent_ptr = 0
@@ -178,6 +184,7 @@ class FrameStackRecurrentRolloutBuffer(RecurrentRolloutBuffer):
 
         self.hidden_states_buf  = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
         self.cell_states_buf    = torch.zeros(hidden_state_shape, dtype=torch.float, device=self.device)
+        self.loopclo_buf        = torch.zeros((self.num_steps, self.num_envs), dtype=torch.float, device=self.device)
 
         self.recurrent_ptr = 0
 
