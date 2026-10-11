@@ -108,10 +108,18 @@ def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
                      hidden_sizes=cfg.head.value_hidden_sizes)
     
     if cfg.backbone.name == "mlp":
+        depth_head = None
+        if cfg.head.auxiliary_head.enabled:
+            # Depth is predicted from the observation embedding, as in the recurrent agent
+            depth_head = DepthHead(feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                                   hidden_sizes=cfg.head.auxiliary_head.depth_hidden_sizes,
+                                   output_dim=int(ray_dim[-1]))  # one depth value per ray
+
         return PPOAgent(obs_embed_model= observation_model,
                         backbone_model= backbone_model,
                         actor=actor, critic=critic,
-                        action_low=cfg.env.action_low, action_high=cfg.env.action_high)
+                        action_low=cfg.env.action_low, action_high=cfg.env.action_high,
+                        depth_head=depth_head)
     else:
         depth_head, loop_closure_head = None, None
         aux_cfg = cfg.head.auxiliary_head

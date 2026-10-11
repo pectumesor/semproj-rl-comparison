@@ -37,13 +37,11 @@ cd "${PROJECT_ROOT}"
 python scripts/train.py --multirun \
     hydra/launcher=euler \
     hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
-    env.room_path="rooms/cross_room.json" \
+    env.room_path="rooms/four_room.json" \
     env.goal_radius=16 \
     wandb.group=aux_loss_test \
     seed=0,1,2,3,4 \
     observation=mlp_observation,cnn_observation \
-    backbone=mlp_backbone,lstm_backbone \
+    backbone=lstm_backbone,mlp_backbone \
     observation.frame_stack.enabled=False,True \
     head.auxiliary_head.enabled=True
- 
-    

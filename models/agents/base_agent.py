@@ -37,6 +37,8 @@ class BaseAgent(nn.Module):
             "critic": self.critic.state_dict(),
             "optimizer": optimizer.state_dict()
         }
+        if getattr(self, "depth_head", None) is not None:
+            checkpoint["depth_head"] = self.depth_head.state_dict()
 
      
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -50,6 +52,8 @@ class BaseAgent(nn.Module):
         self.backbone_model.load_state_dict(checkpoint["backbone"])
         self.actor.load_state_dict(checkpoint["actor"])
         self.critic.load_state_dict(checkpoint["critic"])
+        if getattr(self, "depth_head", None) is not None:
+            self.depth_head.load_state_dict(checkpoint["depth_head"])
         optimizer.load_state_dict(checkpoint["optimizer"])
 
 

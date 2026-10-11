@@ -91,12 +91,15 @@ class RecurrentAgent(nn.Module):
         checkpoint = {
             "obs_embed":self.obs_embed_model.state_dict(),
             "backbone": self.backbone_model.state_dict(),
-            "depth_head": self.depth_head.state_dict(),
-            "loop_head": self.loop_closure_head.state_dict(),
             "actor": self.actor.state_dict(),
             "critic": self.critic.state_dict(),
             "optimizer": optimizer.state_dict()
         }
+        # Auxiliary heads are None when cfg.head.auxiliary_head.enabled is false
+        if self.depth_head is not None:
+            checkpoint["depth_head"] = self.depth_head.state_dict()
+        if self.loop_closure_head is not None:
+            checkpoint["loop_head"] = self.loop_closure_head.state_dict()
 
      
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -108,8 +111,10 @@ class RecurrentAgent(nn.Module):
     
             self.obs_embed_model.load_state_dict(checkpoint["obs_embed"])
             self.backbone_model.load_state_dict(checkpoint["backbone"])
-            self.depth_head.load_state_dict(checkpoint["depth_head"])
-            self.loop_closure_head.load_state_dict(checkpoint["loop_head"])
+            if self.depth_head is not None:
+                self.depth_head.load_state_dict(checkpoint["depth_head"])
+            if self.loop_closure_head is not None:
+                self.loop_closure_head.load_state_dict(checkpoint["loop_head"])
             self.actor.load_state_dict(checkpoint["actor"])
             self.critic.load_state_dict(checkpoint["critic"])
             optimizer.load_state_dict(checkpoint["optimizer"])

@@ -24,6 +24,8 @@ class PPOUpdateStats:
     mean_entropy: float
     mean_train_rew: float
     mean_aux_loss: float = 0
+    mean_depth_loss: float = 0
+    mean_loop_closure_loss: float = 0
     clip_fraction: float = 0
     explained_variance: float = 0
     max_kl: float = 0
@@ -95,6 +97,9 @@ class MLPPPO(PPO):
         # -- Auxiliary Flag --
         self.aux_flag = cfg.head.auxiliary_head.enabled
         self.depth_coeff = cfg.head.auxiliary_head.depth_coeff
+
+        # -- Seed (x-axis of the final AUC, so runs in a group plot as AUC vs. seed) --
+        self.seed = cfg.seed
 
         # -- Constants
         self.gamma = cfg.env.gamma
@@ -222,10 +227,10 @@ class MLPPPO(PPO):
             dist_pred = self.agent.depth_forward(obs_embed_feat)               # (W*B, R)
             
             rays = obs_batch["rays"]
-            if rays.dim() == 5:
-                rays = rays[:, :, -1]  # Frame-stacked: the current frame is the last one in the stack
+            if rays.dim() == 4:
+                rays = rays[:, -1]  # Frame-stacked (B, F, C, R): the current frame is the last one in the stack
             dist_labels = rays[..., 3, :].reshape(-1, rays.shape[-1])          # channel 3: normalized distance
-    
+
             depth_loss = F.mse_loss(dist_pred, dist_labels)
             return depth_loss
 
@@ -265,6 +270,8 @@ class MLPPPO(PPO):
         mean_surrogate_loss = 0
         mean_val_loss = 0
         mean_aux_loss = 0
+        mean_depth_loss = 0
+        mean_loop_closure_loss = 0
         mean_train_rew = 0
         mean_clip_fraction = 0
         num_updates = 0
@@ -315,9 +322,10 @@ class MLPPPO(PPO):
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
-            aux_loss = self.compute_aux_loss(obs_batch)
+            depth_loss = self.compute_aux_loss(obs_batch)
+            aux_loss = self.depth_coeff * depth_loss
             task_loss = surrogate_loss + self.val_coeff * value_loss + self.entropy_coeff * entropy_loss
-            loss = self.task_coeff * task_loss + self.depth_coeff * aux_loss
+            loss = self.task_coeff * task_loss + aux_loss
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -329,6 +337,7 @@ class MLPPPO(PPO):
             mean_val_loss += value_loss.item()
             mean_entropy += entropy_batch.mean().item()
             mean_aux_loss += aux_loss.item()
+            mean_depth_loss += depth_loss.item()
             mean_train_rew += ret_batch.mean().item()
             mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1
@@ -339,6 +348,7 @@ class MLPPPO(PPO):
         mean_val_loss /= num_updates
         mean_entropy /= num_updates
         mean_aux_loss /= num_updates
+        mean_depth_loss /= num_updates
         mean_train_rew /= num_updates
         mean_clip_fraction /= num_updates
 
@@ -348,6 +358,7 @@ class MLPPPO(PPO):
             mean_value_loss=mean_val_loss,
             mean_entropy=mean_entropy,
             mean_aux_loss=mean_aux_loss,
+            mean_depth_loss=mean_depth_loss,
             mean_train_rew=mean_train_rew,
             clip_fraction=mean_clip_fraction,
             explained_variance=explained_variance,
@@ -357,7 +368,7 @@ class MLPPPO(PPO):
 
     def evaluate_policy(self):
         if self.eval_env is None:
-            return None, None
+            return None, None, None
 
         # One vectorized pass: eval_env.num_envs episodes run in parallel. Each env
         # is scored only up to its first termination/truncation (mask `active`);
@@ -365,6 +376,7 @@ class MLPPPO(PPO):
         num_envs = self.eval_env.num_envs
         returns = torch.zeros(num_envs, device=self.device)
         lengths = torch.zeros(num_envs, device=self.device)
+        success = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
         active  = torch.ones(num_envs, dtype=torch.bool, device=self.device)
 
         self.agent.eval()
@@ -377,26 +389,40 @@ class MLPPPO(PPO):
 
                 returns += reward * active
                 lengths += active
+                success |= terminated & active  # terminated == reached the goal
                 active &= ~(terminated | truncated)
 
         self.agent.train()
-        return returns.mean().item(), lengths.float().mean().item()
+        return returns.mean().item(), lengths.float().mean().item(), success.float().mean().item()
 
-    def log_eval_auc(self, eval_steps, eval_returns, total_steps):
+    def log_eval_auc(self, eval_steps, eval_returns, iterations, steps_per_iter):
         """
         Logs the normalized area under the eval-return curve (x-axis in env steps),
-        i.e. the average eval return over the full training budget.
+        i.e. the average eval return over the first `iterations` training iterations.
+
+        Called after every eval with the iterations done so far, so a run killed
+        mid-training (e.g. Slurm timeout) still has an AUC over the part it finished.
+        Called once more after training with n_iterations, which for an early-stopped
+        run carries the last eval forward over the full budget. The AUC is
+        logged against the seed, like the metrics in utils/metrics.py.
         """
         if wandb.run is None or len(eval_returns) == 0:
             return
 
-        # If training stopped early, carry the last eval forward so every run spans the same budget
+        total_steps = iterations * steps_per_iter
+
+        # If training stopped early, carry the last eval forward so the run spans the given budget
         if eval_steps[-1] < total_steps:
             eval_steps = eval_steps + [total_steps]
             eval_returns = eval_returns + [eval_returns[-1]]
 
-        auc = np.trapz(eval_returns, x=eval_steps) / total_steps
-        wandb.run.summary["Eval Return AUC"] = auc
+        auc = np.trapezoid(eval_returns, x=eval_steps) / total_steps
+        wandb.run.define_metric("auc/*", step_metric="auc/seed")
+        wandb.log({
+            "auc/seed": self.seed,
+            "auc/eval_return_auc": auc,
+            "auc/iterations": iterations,
+        })
 
     def train(self, run_dir = None):
 
@@ -418,17 +444,21 @@ class MLPPPO(PPO):
 
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:
-                mean_eval_return, mean_eval_length = self.evaluate_policy()
+                mean_eval_return, mean_eval_length, eval_success_rate = self.evaluate_policy()
                 if mean_eval_return is not None:
                     eval_steps.append(iteration * steps_per_iter)
                     eval_returns.append(mean_eval_return)
-                converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
+                    self.log_eval_auc(eval_steps, eval_returns, iteration, steps_per_iter)
+                # Early stopping runs on the success rate over the eval rollouts, which unlike the
+                # return does not depend on max_steps (the reward is scaled by 1/max_steps)
+                converged = self.early_stopper.step(eval_success_rate, stats.mean_train_rew)
             else:
-                mean_eval_return, mean_eval_length = None, None
+                mean_eval_return, mean_eval_length, eval_success_rate = None, None, None
                 converged = False
 
             eval_return_str = f"{mean_eval_return:.4f}" if mean_eval_return is not None else "n/a"
             eval_length_str = f"{mean_eval_length:.2f}" if mean_eval_length is not None else "n/a"
+            eval_success_str = f"{eval_success_rate:.2f}" if eval_success_rate is not None else "n/a"
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
@@ -442,6 +472,7 @@ class MLPPPO(PPO):
             f"mean_train_rew={stats.mean_train_rew:.4f} "
             f"eval_return={eval_return_str} "
             f"eval_length={eval_length_str} "
+            f"eval_success_rate={eval_success_str} "
             )
 
             if wandb.run is not None:
@@ -458,9 +489,16 @@ class MLPPPO(PPO):
                     f"Clip Fraction": stats.clip_fraction,
                     f"Explained Variance": stats.explained_variance,
                 }
+                if self.aux_flag:
+                    # Aux loss is the weighted sum; depth / loop closure are logged unweighted
+                    log_data[f"Mean Aux Loss"] = stats.mean_aux_loss
+                    log_data[f"Mean Depth Loss"] = stats.mean_depth_loss
+                    if isinstance(self, RecurrentPPO):
+                        log_data[f"Mean Loop Closure Loss"] = stats.mean_loop_closure_loss
                 if mean_eval_return is not None:
                     log_data[f"Mean Eval Return"] = mean_eval_return
                     log_data[f"Mean Eval Length"] = mean_eval_length
+                    log_data[f"Eval Success Rate"] = eval_success_rate
                 wandb.log(log_data)
 
             if run_dir is not None:
@@ -474,7 +512,7 @@ class MLPPPO(PPO):
             if converged:
                 msg = (
                     f"[PPO] Early stopping at iteration={iteration}/{self.n_iterations}: "
-                    f"eval return plateaued (best EMA={self.early_stopper.best:.4f})"
+                    f"eval success rate plateaued (best EMA={self.early_stopper.best:.4f})"
                 )
                 if self.early_stopper.train_best is not None:
                     msg += f", train return plateaued (best EMA={self.early_stopper.train_best:.4f})"
@@ -483,12 +521,12 @@ class MLPPPO(PPO):
                 if wandb.run is not None:
                     wandb.log({
                         f"Early stopping": iteration,
-                        f"Best Eval Return EMA": self.early_stopper.best,
+                        f"Best Eval Success Rate EMA": self.early_stopper.best,
                     })
                 
                 break
 
-        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations * steps_per_iter)
+        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations, steps_per_iter)
 
 class RecurrentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, minibatch_size: int, bptt_window: int,  cfg: DictConfig,
@@ -643,6 +681,8 @@ class RecurrentPPO(MLPPPO):
         mean_surrogate_loss = 0
         mean_val_loss = 0
         mean_aux_loss = 0
+        mean_depth_loss = 0
+        mean_loop_closure_loss = 0
         mean_train_rew = 0
         mean_clip_fraction = 0
         num_updates = 0
@@ -701,6 +741,8 @@ class RecurrentPPO(MLPPPO):
             task_loss = surrogate_loss + self.val_coeff * value_loss + self.entropy_coeff * entropy_loss
 
             aux_loss = torch.tensor(0.0, device=self.device)
+            depth_loss = torch.tensor(0.0, device=self.device)
+            loop_closure_loss = torch.tensor(0.0, device=self.device)
             if self.loop_labeler is not None:
                 depth_loss, loop_closure_loss = self.compute_aux_loss(obs_batch, hidden,
                                                                       bptt_window_batch.loop_labels)
@@ -718,6 +760,8 @@ class RecurrentPPO(MLPPPO):
             mean_val_loss += value_loss.item()
             mean_entropy += entropy_batch.mean().item()
             mean_aux_loss += aux_loss.item()
+            mean_depth_loss += depth_loss.item()
+            mean_loop_closure_loss += loop_closure_loss.item()
             mean_train_rew += ret_batch.mean().item()
             mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1
@@ -728,6 +772,8 @@ class RecurrentPPO(MLPPPO):
         mean_val_loss /= num_updates
         mean_entropy /= num_updates
         mean_aux_loss /= num_updates
+        mean_depth_loss /= num_updates
+        mean_loop_closure_loss /= num_updates
         mean_train_rew /= num_updates
         mean_clip_fraction /= num_updates
 
@@ -737,6 +783,8 @@ class RecurrentPPO(MLPPPO):
             mean_value_loss=mean_val_loss,
             mean_entropy=mean_entropy,
             mean_aux_loss=mean_aux_loss,
+            mean_depth_loss=mean_depth_loss,
+            mean_loop_closure_loss=mean_loop_closure_loss,
             mean_train_rew=mean_train_rew,
             clip_fraction=mean_clip_fraction,
             explained_variance=explained_variance,
@@ -745,13 +793,14 @@ class RecurrentPPO(MLPPPO):
     
     def evaluate_policy(self):
         if self.eval_env is None:
-            return None, None
+            return None, None, None
 
         # One vectorized pass: eval_env.num_envs episodes run in parallel, each
         # scored only up to its first termination/truncation (mask `active`).
         num_envs = self.eval_env.num_envs
         returns = torch.zeros(num_envs, device=self.device)
         lengths = torch.zeros(num_envs, device=self.device)
+        success = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
         active  = torch.ones(num_envs, dtype=torch.bool, device=self.device)
 
         lstm_state = (
@@ -771,10 +820,11 @@ class RecurrentPPO(MLPPPO):
 
                 returns += reward * active
                 lengths += active
+                success |= terminated & active  # terminated == reached the goal
                 active &= ~done
 
         self.agent.train()
-        return returns.mean().item(), lengths.float().mean().item()
+        return returns.mean().item(), lengths.float().mean().item(), success.float().mean().item()
 
     def train(self, run_dir = None):
 
@@ -808,17 +858,21 @@ class RecurrentPPO(MLPPPO):
 
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:
-                mean_eval_return, mean_eval_length = self.evaluate_policy()
+                mean_eval_return, mean_eval_length, eval_success_rate = self.evaluate_policy()
                 if mean_eval_return is not None:
                     eval_steps.append(iteration * steps_per_iter)
                     eval_returns.append(mean_eval_return)
-                converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
+                    self.log_eval_auc(eval_steps, eval_returns, iteration, steps_per_iter)
+                # Early stopping runs on the success rate over the eval rollouts, which unlike the
+                # return does not depend on max_steps (the reward is scaled by 1/max_steps)
+                converged = self.early_stopper.step(eval_success_rate, stats.mean_train_rew)
             else:
-                mean_eval_return, mean_eval_length = None, None
+                mean_eval_return, mean_eval_length, eval_success_rate = None, None, None
                 converged = False
 
             eval_return_str = f"{mean_eval_return:.4f}" if mean_eval_return is not None else "n/a"
             eval_length_str = f"{mean_eval_length:.2f}" if mean_eval_length is not None else "n/a"
+            eval_success_str = f"{eval_success_rate:.2f}" if eval_success_rate is not None else "n/a"
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
@@ -832,6 +886,7 @@ class RecurrentPPO(MLPPPO):
             f"mean_train_rew={stats.mean_train_rew:.4f} "
             f"eval_return={eval_return_str} "
             f"eval_length={eval_length_str} "
+            f"eval_success_rate={eval_success_str} "
             )
 
             if wandb.run is not None:
@@ -848,9 +903,16 @@ class RecurrentPPO(MLPPPO):
                     f"Clip Fraction": stats.clip_fraction,
                     f"Explained Variance": stats.explained_variance,
                 }
+                if self.aux_flag:
+                    # Aux loss is the weighted sum; depth / loop closure are logged unweighted
+                    log_data[f"Mean Aux Loss"] = stats.mean_aux_loss
+                    log_data[f"Mean Depth Loss"] = stats.mean_depth_loss
+                    if isinstance(self, RecurrentPPO):
+                        log_data[f"Mean Loop Closure Loss"] = stats.mean_loop_closure_loss
                 if mean_eval_return is not None:
                     log_data[f"Mean Eval Return"] = mean_eval_return
                     log_data[f"Mean Eval Length"] = mean_eval_length
+                    log_data[f"Eval Success Rate"] = eval_success_rate
                 wandb.log(log_data)
 
             if run_dir is not None:
@@ -864,7 +926,7 @@ class RecurrentPPO(MLPPPO):
             if converged:
                 msg = (
                     f"[PPO] Early stopping at iteration={iteration}/{self.n_iterations}: "
-                    f"eval return plateaued (best EMA={self.early_stopper.best:.4f})"
+                    f"eval success rate plateaued (best EMA={self.early_stopper.best:.4f})"
                 )
                 if self.early_stopper.train_best is not None:
                     msg += f", train return plateaued (best EMA={self.early_stopper.train_best:.4f})"
@@ -873,8 +935,8 @@ class RecurrentPPO(MLPPPO):
                 if wandb.run is not None:
                     wandb.log({
                         f"Early stopping": iteration,
-                        f"Best Eval Return EMA": self.early_stopper.best,
+                        f"Best Eval Success Rate EMA": self.early_stopper.best,
                     })
                 break
 
-        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations * steps_per_iter)
+        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations, steps_per_iter)

@@ -59,7 +59,8 @@ def main(cfg: DictConfig):
 
         trial_name = wandb.run.name
         log_dir = ROOT_DIR / "logs" / f"{trial_name}__{Path(cfg.env.room_path).stem}"
-        run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
+        # Run id keeps parallel jobs (e.g. frame_stack on/off, same seed) from sharing a checkpoint dir
+        run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model") + f"_{wandb.run.id}"
         run_dir = log_dir / run_name
         
 

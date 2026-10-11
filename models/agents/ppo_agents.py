@@ -17,12 +17,22 @@ class PPOAgent(BaseAgent):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: nn.Module,
                  actor: GuassianPolicyHead, critic: ValueNet,
-                 action_low, action_high):
+                 action_low, action_high, depth_head=None):
         super().__init__(obs_embed_model, backbone_model, actor, critic)
+
+        # Depth head is None when cfg.head.auxiliary_head.enabled is false.
+        # No loop closure head: without a recurrent state there is no memory to predict it from.
+        self.depth_head = depth_head
 
         # Per-dimension bounds as buffers so they follow the agent's device
         self.register_buffer("action_low",  torch.as_tensor(action_low,  dtype=torch.float32), persistent=False)
         self.register_buffer("action_high", torch.as_tensor(action_high, dtype=torch.float32), persistent=False)
+
+    def embed_obs(self, obs: dict) -> torch.Tensor:
+        return self.obs_embed_model(obs['rays'], obs['proprio'])
+
+    def depth_forward(self, obs_features: torch.Tensor) -> torch.Tensor:
+        return self.depth_head(obs_features)
 
     def sample_action(self, obs: torch.Tensor):
 
