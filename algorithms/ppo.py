@@ -369,11 +369,30 @@ class MLPPPO(PPO):
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item()
 
+    def log_eval_auc(self, eval_steps, eval_returns, total_steps):
+        """
+        Logs the normalized area under the eval-return curve (x-axis in env steps),
+        i.e. the average eval return over the full training budget.
+        """
+        if wandb.run is None or len(eval_returns) == 0:
+            return
+
+        # If training stopped early, carry the last eval forward so every run spans the same budget
+        if eval_steps[-1] < total_steps:
+            eval_steps = eval_steps + [total_steps]
+            eval_returns = eval_returns + [eval_returns[-1]]
+
+        auc = np.trapz(eval_returns, x=eval_steps) / total_steps
+        wandb.run.summary["Eval Return AUC"] = auc
+
     def train(self, run_dir = None):
 
         self.agent.train()
         obs, _ = self.env.reset()
         done = torch.zeros(self.buffer.num_envs, dtype=torch.bool, device=self.device)
+
+        steps_per_iter = self.buffer.num_steps * self.buffer.num_envs
+        eval_steps, eval_returns = [], [] # Learning curve for the Area under the Curve
 
         for iter in tqdm(range(self.n_iterations), desc="Training"):
 
@@ -387,6 +406,9 @@ class MLPPPO(PPO):
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:
                 mean_eval_return, mean_eval_length = self.evaluate_policy()
+                if mean_eval_return is not None:
+                    eval_steps.append(iteration * steps_per_iter)
+                    eval_returns.append(mean_eval_return)
                 converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
             else:
                 mean_eval_return, mean_eval_length = None, None
@@ -452,6 +474,8 @@ class MLPPPO(PPO):
                     })
                 
                 break
+
+        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations * steps_per_iter)
 
 class RecurrentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, minibatch_size: int, bptt_window: int,  cfg: DictConfig,
@@ -745,7 +769,10 @@ class RecurrentPPO(MLPPPO):
         obs, _ = self.env.reset()
         done = torch.zeros(self.buffer.num_envs, dtype=torch.bool, device=self.device)
         episode_starts = torch.ones(self.buffer.num_envs, dtype=torch.bool, device=self.device)
-        
+
+        steps_per_iter = self.buffer.num_steps * self.buffer.num_envs
+        eval_steps, eval_returns = [], [] # Learning curve for the Area under the Curve
+
         rollout_lstm_state = (
             torch.zeros((self.num_layers, self.buffer.num_envs, self.hidden_size),
                         dtype=torch.float, device=self.device),
@@ -769,6 +796,9 @@ class RecurrentPPO(MLPPPO):
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:
                 mean_eval_return, mean_eval_length = self.evaluate_policy()
+                if mean_eval_return is not None:
+                    eval_steps.append(iteration * steps_per_iter)
+                    eval_returns.append(mean_eval_return)
                 converged = self.early_stopper.step(mean_eval_return, stats.mean_train_rew)
             else:
                 mean_eval_return, mean_eval_length = None, None
@@ -833,3 +863,5 @@ class RecurrentPPO(MLPPPO):
                         f"Best Eval Return EMA": self.early_stopper.best,
                     })
                 break
+
+        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations * steps_per_iter)
