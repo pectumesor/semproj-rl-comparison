@@ -92,15 +92,17 @@ class MLPPPO(PPO):
         self.early_stopping_enabled = bool(es_cfg.enabled)
         self.early_stopper = ConvergenceMonitor(es_cfg)
 
+        # -- Auxiliary Flag --
+        self.aux_flag = cfg.head.auxiliary_head.enabled
+        self.depth_coeff = cfg.head.auxiliary_head.depth_coeff
+
         # -- Constants
         self.gamma = cfg.env.gamma
         self.gae_lambda = cfg.algorithm.gae_lambda
         self.clip_esilon = cfg.algorithm.clip_epsilon
         self.entropy_coeff = cfg.algorithm.entropy_coeff
         self.val_coeff = cfg.algorithm.val_coeff
-        self.aux_coeff = cfg.algorithm.aux_coeff
         self.task_coeff = cfg.algorithm.task_coeff
-        self.intr_coeff = cfg.algorithm.intr_coeff
         self.target_kl = cfg.algorithm.target_kl
         self.max_grad_norm = cfg.algorithm.max_grad_norm
 
@@ -211,10 +213,21 @@ class MLPPPO(PPO):
         # log_std at its clamp ceiling).
         return -entropy_batch.mean()
 
-    def compute_aux_loss(self):
-        # TODO: See what kind of inputs each auxiliary task needs to compute the loss
-        # TODO: Implement reward computation inside the auxiliary head architecture, call it here
-        return torch.tensor(0.0, device=self.device)
+    def compute_aux_loss(self, obs_batch: torch.Tensor):
+        if not self.aux_flag:
+            return torch.tensor(0.0, device=self.device)
+        else:
+            # Depth loss: predict the normalized ray distances from the observation embedding
+            obs_embed_feat = self.agent.embed_obs(obs_batch)                   # (W*B, D)
+            dist_pred = self.agent.depth_forward(obs_embed_feat)               # (W*B, R)
+            
+            rays = obs_batch["rays"]
+            if rays.dim() == 5:
+                rays = rays[:, :, -1]  # Frame-stacked: the current frame is the last one in the stack
+            dist_labels = rays[..., 3, :].reshape(-1, rays.shape[-1])          # channel 3: normalized distance
+    
+            depth_loss = F.mse_loss(dist_pred, dist_labels)
+            return depth_loss
 
     def compute_kl_mean(self, old_mu_batch, old_std_batch, mu_batch, std_batch):
 
@@ -302,9 +315,9 @@ class MLPPPO(PPO):
             surrogate_loss = self.compute_surrogate_loss(logp_batch, old_logp_batch, adv_batch)
             value_loss = self.compute_value_loss(val_batch, old_val_batch, ret_batch)
             entropy_loss = self.compute_entropy_loss(entropy_batch)
-            intr_loss = self.compute_aux_loss()
+            aux_loss = self.compute_aux_loss(obs_batch)
             task_loss = surrogate_loss + self.val_coeff * value_loss + self.entropy_coeff * entropy_loss
-            loss = self.task_coeff * task_loss + self.intr_coeff * intr_loss
+            loss = self.task_coeff * task_loss + self.depth_coeff * aux_loss
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -315,7 +328,7 @@ class MLPPPO(PPO):
             mean_surrogate_loss += surrogate_loss.item()
             mean_val_loss += value_loss.item()
             mean_entropy += entropy_batch.mean().item()
-            mean_aux_loss += intr_loss.item()
+            mean_aux_loss += aux_loss.item()
             mean_train_rew += ret_batch.mean().item()
             mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1

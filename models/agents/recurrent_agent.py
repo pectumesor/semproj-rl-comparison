@@ -10,19 +10,29 @@ from pathlib import Path
 class RecurrentAgent(nn.Module):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: SimpleLSTM,
-                 actor: GuassianPolicyHead, critic: nn.Module):
+                 actor: GuassianPolicyHead, critic: nn.Module,
+                 depth_head: DepthHead = None, loop_closure_head: LoopClosureHead = None):
         super().__init__()
         self.obs_embed_model = obs_embed_model
         self.backbone_model = backbone_model
         self.actor = actor
         self.critic = critic
 
+        self.depth_head = depth_head
+        self.loop_closure_head = loop_closure_head
+        
     def forward(self, obs,
                 lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
 
         obs_feat = self.embed_obs(obs)
         hidden, new_lstm_state = self.backbone_model(obs_feat, lstm_state, done)
         return hidden, new_lstm_state
+
+    def depth_forward(self, backbone_features: torch.Tensor):
+        return self.depth_head(backbone_features)
+            
+    def loop_closure_forward(self, backbone_features: torch.Tensor):
+        return self.loop_closure_head(backbone_features)
 
     def embed_obs(self, obs) -> torch.Tensor:
         # Non-stacked rays/proprio carry only (..., C, R) / (..., proprio_dim) trailing dims.
@@ -81,6 +91,8 @@ class RecurrentAgent(nn.Module):
         checkpoint = {
             "obs_embed":self.obs_embed_model.state_dict(),
             "backbone": self.backbone_model.state_dict(),
+            "depth_head": self.depth_head.state_dict(),
+            "loop_head": self.loop_closure_head.state_dict(),
             "actor": self.actor.state_dict(),
             "critic": self.critic.state_dict(),
             "optimizer": optimizer.state_dict()
@@ -89,47 +101,6 @@ class RecurrentAgent(nn.Module):
      
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(checkpoint, path)
-
-    def load_model(self, path, device, optimizer: optim.Optimizer):
-
-        checkpoint = torch.load(path, map_location=device)
-
-        self.obs_embed_model.load_state_dict(checkpoint["obs_embed"])
-        self.backbone_model.load_state_dict(checkpoint["backbone"])
-        self.actor.load_state_dict(checkpoint["actor"])
-        self.critic.load_state_dict(checkpoint["critic"])
-        optimizer.load_state_dict(checkpoint["optimizer"])
-
-class RecurrentAgentAuxiliaryHead(RecurrentAgent):
-
-    def __init__(self, depth_head: DepthHead, loop_closure_head: LoopClosureHead, **kwargs):
-        super().__init__(**kwargs)
-
-        self.depth_head = depth_head
-        self.loop_closure_head = loop_closure_head
-
-    def depth_forward(self, backbone_features: torch.Tensor):
-        return self.depth_head(backbone_features)
-
-    def loop_closure_forward(self, backbone_features: torch.Tensor):
-        return self.loop_closure_head(backbone_features)
-
-
-    def save_model(self, path, optimizer: optim.Optimizer):
-            
-            checkpoint = {
-                "obs_embed":self.obs_embed_model.state_dict(),
-                "backbone": self.backbone_model.state_dict(),
-                "depth_head": self.depth_head.state_dict(),
-                "loop_head": self.loop_closure_head.state_dict(),
-                "actor": self.actor.state_dict(),
-                "critic": self.critic.state_dict(),
-                "optimizer": optimizer.state_dict()
-            }
-    
-         
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            torch.save(checkpoint, path)
     
     def load_model(self, path, device, optimizer: optim.Optimizer):
     

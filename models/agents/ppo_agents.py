@@ -4,7 +4,7 @@ import torch.optim as optim
 from ..heads import GuassianPolicyHead, SquashedGaussianPolicyHead, DoubleQNet, ValueNet
 from pathlib import Path
 from .base_agent import BaseAgent
-from .recurrent_agent import RecurrentAgent, RecurrentAgentAuxiliaryHead
+from .recurrent_agent import RecurrentAgent
 from typing import Optional, Tuple
 
 
@@ -53,7 +53,7 @@ class PPOAgent(BaseAgent):
     def get_state_action_value(self, obs: dict, actions: torch.Tensor):
         raise ValueError("PPO Agent has no QNet or Double QNet to compute State-Action Values")
 
-class RecurrentPPOAgent(RecurrentAgentAuxiliaryHead):
+class RecurrentPPOAgent(RecurrentAgent):
 
     def __init__(self, obs_embed_model,
                   backbone_model, actor, critic,

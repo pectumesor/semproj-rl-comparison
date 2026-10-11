@@ -10,9 +10,7 @@ clip_epsilon: 0.2
 # Watch "Global Std": it should settle around 0.1-0.6, not sit at exp(1)=2.72.
 entropy_coeff: 0.005
 val_coeff: 0.5
-aux_coeff: 0.2
 task_coeff: 1.0
-intr_coeff: 0.0
 # Hard trust-region guard: once the running-mean KL(old||new) over an update exceeds `1.5 * target_kl`,
 # the rest of the epoch loop for that rollout is skipped, so a drifting policy
 # can't be wrecked by the tail of the update.
