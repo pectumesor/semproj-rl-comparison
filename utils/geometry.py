@@ -3,6 +3,46 @@ import numpy as np
 import json
 import os
 
+class InitialPositionSampler:
+    """
+    Samples initial agent positions inside the room.
+
+    Each spawn region in the room JSON is a list of edges describing an axis-aligned rectangle.
+    Every sample picks a region uniformly at random per env and then a uniform point inside it.
+    An empty list means the room is a single closed area, so the bounding box (shrunk by
+    wall_offset) is used instead.
+    """
+    def __init__(self, json_path, wall_offset=0.0, device="cpu"):
+        self.device = device
+        self.spawn_regions = get_spawn_regions_json(json_path)
+        self.N = len(self.spawn_regions)
+        self.bounding_box = bounding_box(*compute_starts_and_ends(walls_json_to_numpy(json_path)))
+
+        if self.N == 0:
+            min_x, max_x, min_y, max_y = self.bounding_box
+            boxes = [[min_x + wall_offset, max_x - wall_offset, min_y + wall_offset, max_y - wall_offset]]
+        else:
+            boxes = [region_to_box(region) for region in self.spawn_regions]
+
+        # (num_boxes, 4) as [min_x, max_x, min_y, max_y]
+        self.boxes = torch.tensor(np.asarray(boxes, dtype=np.float32), device=device)
+
+    def sample_spawn_region(self, num_envs):
+        """Returns one box per env, shape (num_envs, 4)."""
+        if self.N == 0:
+            return self.boxes.expand(num_envs, -1)
+        idx = torch.randint(0, self.N, (num_envs,), device=self.device)
+        return self.boxes[idx]
+
+    def sample(self, num_envs):
+        """Returns uniformly sampled positions inside freshly sampled spawn regions, shape (num_envs, 2)."""
+        box = self.sample_spawn_region(num_envs)
+        u = torch.rand((num_envs, 2), device=self.device)
+        x = box[:, 0] + u[:, 0] * (box[:, 1] - box[:, 0])
+        y = box[:, 2] + u[:, 1] * (box[:, 3] - box[:, 2])
+        return torch.stack([x, y], dim=-1)
+
+
 def path_length(trajectory):
     """ Given a trajectory as a sequence of 2D points (list or array of shape (N, 2)),
      we compute the trajectory length by adding the distance of each edge between intermediate points"""
@@ -36,8 +76,21 @@ def start_goal_pos_from_json(json_path: str):
 
     return start_pos, end_pos
 
+def get_spawn_regions_json(json_path: str):
+    with open(json_path) as f:
+        data = json.load(f)
     
+    return data.get("spawn_regions", [])
 
+def region_to_box(region):
+    """Axis-aligned box [min_x, max_x, min_y, max_y] spanned by the edges of a spawn region."""
+    points = np.array([[edge[k]["x"], edge[k]["y"]] for edge in region for k in ("from", "to")],
+                      dtype=np.float32)
+    min_x, min_y = points.min(axis=0)
+    max_x, max_y = points.max(axis=0)
+    return [min_x, max_x, min_y, max_y]
+
+    
 def convert_hospital_json_format(input_path: str, output_path: str):
 
     """

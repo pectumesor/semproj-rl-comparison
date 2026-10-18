@@ -7,7 +7,7 @@ import imageio.v3 as iio
 from omegaconf import DictConfig
 from .env_utils import RayCast, PerlinColor
 from utils.geometry import (walls_json_to_numpy, compute_starts_and_ends,
-                             w2s, bounding_box, diagonal_length, start_goal_pos_from_json)
+                             w2s, bounding_box, diagonal_length, start_goal_pos_from_json, InitialPositionSampler)
 
 WALL_OFFSET = 10
 
@@ -59,6 +59,7 @@ class NavigationEnv(gym.Env):
         self.goal_radius  = float(cfg.env.get("goal_radius", 1e-4))
 
         start_pos, goal_pos = start_goal_pos_from_json(cfg.env.room_path)
+        self.spawn_sampler = InitialPositionSampler(cfg.env.room_path, wall_offset=WALL_OFFSET, device=device)
 
         self.goal_pos = torch.tensor(
             goal_pos, dtype=torch.float32, device=device,
@@ -68,7 +69,7 @@ class NavigationEnv(gym.Env):
 
         self.walls = walls_json_to_numpy(cfg.env.room_path)
         ws_np, we_np = compute_starts_and_ends(self.walls)
-        self.bounding_box = bounding_box(we_np, ws_np)
+        self.bounding_box = self.spawn_sampler.bounding_box
         if cfg.env.range_type == "diagonal":
             max_range = diagonal_length(*self.bounding_box)
         elif cfg.env.range_type == "horizontal":
@@ -80,14 +81,7 @@ class NavigationEnv(gym.Env):
         wall_ends   = torch.tensor(we_np, dtype=torch.float32, device=device)
         self.ray_cast = RayCast(cfg, wall_starts, wall_ends, num_rays, max_range).to(device)
       
-        self.agent_pos = torch.zeros(self.num_envs, 2, dtype=torch.float32, device=self.device)
-        
-        x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
-                                                                                self.bounding_box[1] - WALL_OFFSET)
-        y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
-                                                                                self.bounding_box[3] - WALL_OFFSET)
-        rand_pos = torch.stack([x,y], dim=-1)
-        self.agent_pos        = rand_pos
+        self.agent_pos        = self.spawn_sampler.sample(self.num_envs)
         self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
         
         self.initial_pos = torch.tensor(
@@ -150,11 +144,7 @@ class NavigationEnv(gym.Env):
         mask = (torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
                 if done is None else done)
 
-        x = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[0] + WALL_OFFSET,
-                                                                        self.bounding_box[1] - WALL_OFFSET)
-        y = torch.empty((self.num_envs,), device=self.device).uniform_(self.bounding_box[2] + WALL_OFFSET,
-                                                                        self.bounding_box[3] - WALL_OFFSET)
-        rand_pos = torch.stack([x,y], dim=-1)
+        rand_pos = self.spawn_sampler.sample(self.num_envs)
         rand_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
 
         self.agent_pos[mask]        = rand_pos[mask] if self.random_pos_flag else self.initial_pos
