@@ -13,4 +13,3 @@ wandb:
   mode: online       # online | offline | disabled
 
 seed: 0
-

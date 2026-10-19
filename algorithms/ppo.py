@@ -395,33 +395,21 @@ class MLPPPO(PPO):
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item(), success.float().mean().item()
 
-    def log_eval_auc(self, eval_steps, eval_returns, iterations, steps_per_iter):
+    def log_eval_auc(self, eval_steps, mean_eval_success_rates):
         """
-        Logs the normalized area under the eval-return curve (x-axis in env steps),
-        i.e. the average eval return over the first `iterations` training iterations.
+        Logs the normalized area under the mean_eval_success_rate curve (x-axis in env eval steps),
+        i.e. the average evaluation success rate divided by how often we evaluated the policy during training
 
-        Called after every eval with the iterations done so far, so a run killed
-        mid-training (e.g. Slurm timeout) still has an AUC over the part it finished.
-        Called once more after training with n_iterations, which for an early-stopped
-        run carries the last eval forward over the full budget. The AUC is
-        logged against the seed, like the metrics in utils/metrics.py.
         """
-        if wandb.run is None or len(eval_returns) == 0:
+        if wandb.run is None or len(mean_eval_success_rates) == 0:
             return
 
-        total_steps = iterations * steps_per_iter
-
-        # If training stopped early, carry the last eval forward so the run spans the given budget
-        if eval_steps[-1] < total_steps:
-            eval_steps = eval_steps + [total_steps]
-            eval_returns = eval_returns + [eval_returns[-1]]
-
-        auc = np.trapezoid(eval_returns, x=eval_steps) / total_steps
+        auc = np.trapezoid(mean_eval_success_rates, x=eval_steps) / eval_steps
         wandb.run.define_metric("auc/*", step_metric="auc/seed")
         wandb.log({
             "auc/seed": self.seed,
             "auc/eval_return_auc": auc,
-            "auc/iterations": iterations,
+            "auc/iterations": eval_steps,
         })
 
     def train(self, run_dir = None):
@@ -431,7 +419,8 @@ class MLPPPO(PPO):
         done = torch.zeros(self.buffer.num_envs, dtype=torch.bool, device=self.device)
 
         steps_per_iter = self.buffer.num_steps * self.buffer.num_envs
-        eval_steps, eval_returns = [], [] # Learning curve for the Area under the Curve
+        mean_eval_success_rates = [] # Learning curve for the Area under the Curve
+        eval_steps = 0
 
         for iter in tqdm(range(self.n_iterations), desc="Training"):
 
@@ -444,21 +433,18 @@ class MLPPPO(PPO):
 
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:
-                mean_eval_return, mean_eval_length, eval_success_rate = self.evaluate_policy()
-                if mean_eval_return is not None:
-                    eval_steps.append(iteration * steps_per_iter)
-                    eval_returns.append(mean_eval_return)
-                    self.log_eval_auc(eval_steps, eval_returns, iteration, steps_per_iter)
-                # Early stopping runs on the success rate over the eval rollouts, which unlike the
-                # return does not depend on max_steps (the reward is scaled by 1/max_steps)
-                converged = self.early_stopper.step(eval_success_rate, stats.mean_train_rew)
+                mean_eval_return, mean_eval_length, mean_eval_success_rate = self.evaluate_policy()
+                if mean_eval_success_rate is not None:
+                    eval_steps+=1
+                    mean_eval_success_rates.append(mean_eval_success_rate)
+                converged = self.early_stopper.step(mean_eval_success_rate)
             else:
                 mean_eval_return, mean_eval_length, eval_success_rate = None, None, None
                 converged = False
 
             eval_return_str = f"{mean_eval_return:.4f}" if mean_eval_return is not None else "n/a"
             eval_length_str = f"{mean_eval_length:.2f}" if mean_eval_length is not None else "n/a"
-            eval_success_str = f"{eval_success_rate:.2f}" if eval_success_rate is not None else "n/a"
+            eval_success_str = f"{mean_eval_success_rate:.2f}" if mean_eval_success_rate is not None else "n/a"
             print(
             f"[PPO] iteration={iteration}/{self.n_iterations} "
             f"step={self.buffer.num_steps * iteration * self.buffer.num_envs} "
@@ -526,7 +512,7 @@ class MLPPPO(PPO):
                 
                 break
 
-        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations, steps_per_iter)
+        self.log_eval_auc(eval_steps, mean_eval_success_rates)
 
 class RecurrentPPO(MLPPPO):
     def __init__(self, num_layers: int, hidden_size: int, minibatch_size: int, bptt_window: int,  cfg: DictConfig,

@@ -8,6 +8,9 @@ CONDA_ENVIRONMENT=semproj
 CONDA_ROOT=${HOME}/miniforge3
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+WANDB_GROUP=hard_rooms
+STORAGE=$SCRATCH/$WANDB_GROUP
+
 # eth_proxy gives the login node outbound internet (needed by conda/pip/wandb).
 module load eth_proxy
 
@@ -46,4 +49,5 @@ python scripts/train.py --multirun \
     head.auxiliary_head.enabled=False,True \
     env.gamma=0.999 \
     algorithm.max_steps=2048 \
+    storage=$
 

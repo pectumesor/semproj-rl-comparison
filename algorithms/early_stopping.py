@@ -51,18 +51,9 @@ class ConvergenceMonitor:
     """
     Early-stopping driver that combines two signals:
 
-    * the eval return  -- the primary "is the policy actually good?" signal,
+    * the eval success rate  -- the primary "is the policy actually good?" signal,
       gated by `min_converged_value` so we never stop while it is still bad;
-    * (optionally) the training return -- a secondary "is the policy still
-      visibly learning?" signal.
-
-    A run is only stopped once BOTH EMAs have plateaued for `patience`
-    consecutive checks. The eval return alone is noisy (few eval episodes,
-    stochastic starts) and can look flat for a while even when the stochastic
-    training return -- and entropy / action std -- are still moving. Requiring
-    the training return to have settled as well avoids stopping too early.
-
-    Set `track_train_return: false` in the config to fall back to eval-only.
+   
     """
 
     def __init__(self, es_cfg):
@@ -76,29 +67,14 @@ class ConvergenceMonitor:
             min_converged_value=es_cfg.min_converged_value,
         )
 
-        self.track_train_return = bool(es_cfg.get("track_train_return", False))
-        self.train_stopper = None
-        if self.track_train_return:
-            self.train_stopper = EarlyStopping(
-                patience=es_cfg.patience,
-                # train return lives on a per-step scale, so it needs its own
-                # (smaller) plateau threshold.
-                min_delta=es_cfg.get("train_min_delta", es_cfg.min_delta),
-                ema_alpha=es_cfg.ema_alpha,
-            )
-
-    def step(self, eval_return: float, train_return: float = None) -> bool:
+    def step(self, eval_success_rate: float) -> bool:
         """Returns True once training is considered converged."""
         if not self.enabled:
             return False
 
-        eval_converged = self.eval_stopper.step(eval_return)
+        eval_converged = self.eval_stopper.step(eval_success_rate)
 
-        train_plateaued = True
-        if self.train_stopper is not None:
-            train_plateaued = self.train_stopper.step(train_return)
-
-        return eval_converged and train_plateaued
+        return eval_converged
 
     @property
     def improved(self) -> bool:
@@ -109,6 +85,3 @@ class ConvergenceMonitor:
     def best(self) -> float:
         return self.eval_stopper.best
 
-    @property
-    def train_best(self):
-        return self.train_stopper.best if self.train_stopper is not None else None
