@@ -13,3 +13,10 @@ wandb:
   mode: online       # online | offline | disabled
 
 seed: 0
+
+# Checkpoints and per-seed metric arrays go to
+# <storage>/{models,eval_metrics}/<timestamp>/<room>/<architecture>/seed_<s>
+storage: ${hydra:runtime.cwd}/logs
+# The .sh scripts pass one timestamp for the whole sweep: SLURM jobs resolve ${now:} on their
+# own node at their own start time, so this default only stays shared within a single process
+timestamp: ${now:%Y%m%d_%H%M%S}

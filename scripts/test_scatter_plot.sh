@@ -8,13 +8,14 @@ CONDA_ENVIRONMENT=semproj
 CONDA_ROOT=${HOME}/miniforge3
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Checkpoints are loaded from ${LOG_ROOT}/<obs>_<backbone>_<algo>_seed_<s>/${RUN_NAME}/best.pt
-# Override via: ./test_scatter_plot.sh [LOG_ROOT] [RUN_NAME] [TIMEOUT_MIN]
-#   RUN_NAME=latest picks the newest checkpoint per seed
-#   TIMEOUT_MIN is the SLURM time limit; every architecture x seed runs sequentially in one job
-LOG_ROOT="${1:-${PROJECT_ROOT}/logs}"
-RUN_NAME="${2:-26_09_20_bptt_model}"
-TIMEOUT_MIN="${3:-720}"
+# Re-plots the mean of means of an already finished sweep, e.g. if the node that launched
+# it died before running evaluate_metrics.py. Reads ${STORAGE}/eval_metrics/${TIMESTAMP}/
+# Usage: ./test_scatter_plot.sh GROUP_NAME TIMESTAMP [STORAGE]
+#   TIMESTAMP is the sweep's folder name, e.g. 20261019_182907
+#   STORAGE defaults to ${SCRATCH}/${GROUP_NAME}, as in the sweep scripts
+GROUP_NAME="$1"
+TIMESTAMP="$2"
+STORAGE="${3:-${SCRATCH}/${GROUP_NAME}}"
 
 
 # eth_proxy gives the login node outbound internet (needed by conda/pip/wandb).
@@ -40,23 +41,8 @@ else
 fi
 set -u
 
-mkdir -p "${SCRATCH}/.submitit"
-
 cd "${PROJECT_ROOT}"
-
-
-# Single SLURM job and single wandb run evaluating every architecture on all seeds.
-# --multirun is only needed so the submitit launcher submits to SLURM; no override below
-# is a comma sweep (the [..] lists are single values), so it expands to exactly one job.
-python scripts/evaluate_metrics.py --multirun \
-    hydra/launcher=euler \
-    hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
-    hydra.launcher.timeout_min="${TIMEOUT_MIN}" \
-    env.room_path="rooms/four_room.json" \
-    env.goal_radius=16 \
-    wandb.group=scatter_plot_test \
-    "+eval.log_root=${LOG_ROOT}" \
-    "+eval.run_name=${RUN_NAME}" \
-    "+eval.seeds=[0,1,2,3,4]" \
-    "+eval.observations=[mlp_observation,cnn_observation]" \
-    "+eval.backbones=[mlp_backbone,lstm_backbone]"
+python scripts/evaluate_metrics.py \
+    wandb.group="${GROUP_NAME}" \
+    storage="${STORAGE}" \
+    timestamp="${TIMESTAMP}"

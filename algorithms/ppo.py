@@ -404,7 +404,9 @@ class MLPPPO(PPO):
         if wandb.run is None or len(mean_eval_success_rates) == 0:
             return
 
-        auc = np.trapezoid(mean_eval_success_rates, x=eval_steps) / eval_steps
+        # Unit spacing between evaluations: n points span n - 1, so this is the mean height in [0, 1]
+        auc = (np.trapezoid(mean_eval_success_rates) / (eval_steps - 1) if eval_steps > 1
+               else mean_eval_success_rates[0])
         wandb.run.define_metric("auc/*", step_metric="auc/seed")
         wandb.log({
             "auc/seed": self.seed,
@@ -439,7 +441,7 @@ class MLPPPO(PPO):
                     mean_eval_success_rates.append(mean_eval_success_rate)
                 converged = self.early_stopper.step(mean_eval_success_rate)
             else:
-                mean_eval_return, mean_eval_length, eval_success_rate = None, None, None
+                mean_eval_return, mean_eval_length, mean_eval_success_rate = None, None, None
                 converged = False
 
             eval_return_str = f"{mean_eval_return:.4f}" if mean_eval_return is not None else "n/a"
@@ -484,7 +486,7 @@ class MLPPPO(PPO):
                 if mean_eval_return is not None:
                     log_data[f"Mean Eval Return"] = mean_eval_return
                     log_data[f"Mean Eval Length"] = mean_eval_length
-                    log_data[f"Eval Success Rate"] = eval_success_rate
+                    log_data[f"Eval Success Rate"] = mean_eval_success_rate
                 wandb.log(log_data)
 
             if run_dir is not None:
@@ -820,7 +822,8 @@ class RecurrentPPO(MLPPPO):
         episode_starts = torch.ones(self.buffer.num_envs, dtype=torch.bool, device=self.device)
 
         steps_per_iter = self.buffer.num_steps * self.buffer.num_envs
-        eval_steps, eval_returns = [], [] # Learning curve for the Area under the Curve
+        eval_success_rates = [] # Learning curve for the Area under the Curve
+        eval_steps = 0
 
         rollout_lstm_state = (
             torch.zeros((self.num_layers, self.buffer.num_envs, self.hidden_size),
@@ -845,13 +848,12 @@ class RecurrentPPO(MLPPPO):
             eval_due = iteration % self.eval_interval == 0 or iteration == self.n_iterations
             if eval_due:
                 mean_eval_return, mean_eval_length, eval_success_rate = self.evaluate_policy()
-                if mean_eval_return is not None:
-                    eval_steps.append(iteration * steps_per_iter)
-                    eval_returns.append(mean_eval_return)
-                    self.log_eval_auc(eval_steps, eval_returns, iteration, steps_per_iter)
+                if eval_success_rate is not None:
+                    eval_steps += 1
+                    eval_success_rates.append(eval_success_rate)
                 # Early stopping runs on the success rate over the eval rollouts, which unlike the
                 # return does not depend on max_steps (the reward is scaled by 1/max_steps)
-                converged = self.early_stopper.step(eval_success_rate, stats.mean_train_rew)
+                converged = self.early_stopper.step(eval_success_rate)
             else:
                 mean_eval_return, mean_eval_length, eval_success_rate = None, None, None
                 converged = False
@@ -925,4 +927,4 @@ class RecurrentPPO(MLPPPO):
                     })
                 break
 
-        self.log_eval_auc(eval_steps, eval_returns, self.n_iterations, steps_per_iter)
+        self.log_eval_auc(eval_steps, eval_success_rates)

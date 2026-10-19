@@ -1,3 +1,6 @@
+import warnings
+from pathlib import Path
+
 import numpy as np
 import torch
 from .geometry import path_length
@@ -37,8 +40,10 @@ def extract_trajectory_recurrent(agent, env, nr_runs):
 
     trajectories = []
     print("Extracting trajectories...")
+    # Each iteration is one env step, so after a few horizons every env has finished several
+    # episodes; a policy that still hasn't reached the goal by then is not going to
     cutoff = 0
-    while len(trajectories) < nr_runs and cutoff < 50:
+    while len(trajectories) < nr_runs and cutoff < 3 * max_len:
         with torch.no_grad():
             action, lstm_state = agent.predict_action(obs, lstm_state, done)
         obs, _, terminated, truncated, info = env.step(action)
@@ -60,7 +65,7 @@ def extract_trajectory_recurrent(agent, env, nr_runs):
             step_idx[reset_ids]  = 0
         cutoff += 1
 
-    nr_traj_found = len(trajectories) # will be == nr_runs if we succeed, otherwise less if cutt off
+    nr_traj_found = min(len(trajectories), nr_runs) # will be == nr_runs if we succeed, otherwise less if cutt off
 
     return trajectories[:nr_traj_found], nr_traj_found
 
@@ -82,8 +87,10 @@ def extract_trajectory_mlp(agent, env, nr_runs):
 
     trajectories = []
     print("Extracting trajectories...")
+    # Each iteration is one env step, so after a few horizons every env has finished several
+    # episodes; a policy that still hasn't reached the goal by then is not going to
     cutoff = 0
-    while len(trajectories) < nr_runs and cutoff < 50:
+    while len(trajectories) < nr_runs and cutoff < 3 * max_len:
         with torch.no_grad():
             action = agent.predict_action(obs)
         obs, _, terminated, truncated, info = env.step(action)
@@ -105,7 +112,7 @@ def extract_trajectory_mlp(agent, env, nr_runs):
             step_idx[reset_ids]  = 0
         cutoff+=1
 
-    nr_traj_found = len(trajectories) # will be == nr_runs if we succeed, otherwise less if cutt off
+    nr_traj_found = min(len(trajectories), nr_runs) # will be == nr_runs if we succeed, otherwise less if cutt off
 
     return trajectories[:nr_traj_found], nr_traj_found
 
@@ -231,13 +238,14 @@ def normalized_path_length(test_trajectory, reference_trajectory):
 
     return -1 if len(test_trajectory) == 0 else path_length(test_trajectory) / path_length(reference_trajectory)
 
-def evaluate_model_on_metrics(agent, env, episodes, seed,
+def evaluate_model_on_metrics(agent, env, episodes,
                                nr_runs, json_path, storage_path, backbone_type):
-
-    wandb.run.define_metric("metrics/*", step_metric="metrics/seed")
+    """
+    Score one trained seed and save its raw per-run values to storage_path as
+    {cr,dtw,npl}_values.npy. plot_mean_of_means later aggregates the seed folders.
+    """
 
     reference_trajectory = generate_reference_trajectory(json_path)
-    
 
     # For Means of Means increase the nr_runs to > 1
     if backbone_type == "mlp":
@@ -247,24 +255,121 @@ def evaluate_model_on_metrics(agent, env, episodes, seed,
         trajectory, nr_traj_found = extract_trajectory_recurrent(agent, env, nr_runs)
         cr = completion_rate_recurrent
 
-    cr_values = np.zeros((len(seed), nr_traj_found))
-    dtw_values = np.zeros((len(seed), nr_traj_found))
-    npl_values = np.zeros((len(seed), nr_traj_found))
-    
     if nr_traj_found == 0: # Untrained/bad policy, no successful trajectories found
-        cr_values[seed] = np.zeros(nr_traj_found)
-        dtw_values[seed] = np.zeros(nr_traj_found)
-        npl_values[seed] = np.zeros(nr_traj_found)
+        cr_values = np.zeros(nr_runs)
+        dtw_values = np.zeros(nr_runs)
+        npl_values = np.zeros(nr_runs)
 
     else:
-        for i in tqdm(range(nr_runs), desc=f"Evaluating policy on metrics on seed {seed}"):
-            cr_values[seed, i] = cr(agent, env, episodes)
-            # Score DTW and NPL on the *same* goal-reaching rollout.
-            dtw_values[seed, i] = dynamic_time_warping(trajectory[i], reference_trajectory)
-            npl_values[seed, i] = normalized_path_length(trajectory[i], reference_trajectory)
+        # CR rolls out its own episodes; DTW and NPL score the goal-reaching rollouts found,
+        # which can be fewer than nr_runs if the extraction hit its cutoff
+        cr_values = np.array([cr(agent, env, episodes)
+                              for _ in tqdm(range(nr_runs), desc="Evaluating completion rate")])
+        dtw_values = np.array([dynamic_time_warping(traj, reference_trajectory) for traj in trajectory])
+        npl_values = np.array([normalized_path_length(traj, reference_trajectory) for traj in trajectory])
 
-            
-    # TODO: Store metric values on scratch, to be ploted later
+    storage_path = Path(storage_path)
+    storage_path.mkdir(parents=True, exist_ok=True)
     np.save(storage_path / "cr_values.npy", cr_values)
     np.save(storage_path / "dtw_values.npy", dtw_values)
     np.save(storage_path / "npl_values.npy", npl_values)
+
+# (file prefix, plot title, y-limits). CR is a percentage, see completion_rate_mlp
+MEAN_OF_MEANS_METRICS = [
+    ("cr",  "Completion rate (CR) [%]",     (0.0, 100.0)),
+    ("dtw", "Dynamic time warping (DTW)",   None),
+    ("npl", "Normalized path length (NPL)", None),
+]
+
+def load_seed_metrics(metric_dir):
+    """
+    Return {seed: {"cr": values, "dtw": values, "npl": values}} for every seed_<s> folder
+    in metric_dir holding all three arrays. Seeds whose job died before saving are skipped.
+    """
+    per_seed = {}
+    seed_dirs = sorted(Path(metric_dir).glob("seed_*"), key=lambda p: int(p.name.split("_")[-1]))
+    for seed_dir in seed_dirs:
+        paths = {key: seed_dir / f"{key}_values.npy" for key, _, _ in MEAN_OF_MEANS_METRICS}
+        if not all(path.is_file() for path in paths.values()):
+            warnings.warn(f"Incomplete metrics in {seed_dir}, skipping it")
+            continue
+        per_seed[int(seed_dir.name.split("_")[-1])] = {key: np.load(path) for key, path in paths.items()}
+    return per_seed
+
+def _gaussian_column(ax, x, mu, width, color, max_halfwidth=0.4):
+    """Draw a vertical Gaussian N(mu, width^2) centred at x-position `x`."""
+    if not np.isfinite(width) or width <= 0:
+        # Zero spread (e.g. every run had CR = 100) or a single run -> draw a flat bar instead
+        ax.hlines(mu, x - max_halfwidth, x + max_halfwidth, color=color, lw=2)
+        return
+    y = np.linspace(mu - 4 * width, mu + 4 * width, 200)
+    pdf = norm.pdf(y, mu, width)
+    w = max_halfwidth * pdf / pdf.max()  # normalise so curves never overlap
+    ax.fill_betweenx(y, x - w, x + w, color=color, alpha=0.35, lw=0)
+    ax.plot(x - w, y, color=color, lw=0.8)
+    ax.plot(x + w, y, color=color, lw=0.8)
+
+def plot_mean_of_means(metric_dir, title="", spread="sem", show_runs=True):
+    """
+    Plot each metric as one vertical Gaussian per seed, plus the mean of the per-seed means
+    with its 95% CI across seeds (t-distribution, since there are few seeds).
+
+    metric_dir: folder with one seed_<s>/ subfolder per seed, as written by evaluate_model_on_metrics
+    spread: "sem" -> Gaussian width = uncertainty of each seed's mean (sd / sqrt(n))
+            "sd"  -> Gaussian width = spread of individual runs
+    Returns (figure, summary), summary holding the mean of means and CI half-width per metric,
+    or (None, None) if metric_dir has no complete seed.
+    """
+    per_seed = load_seed_metrics(metric_dir)
+    if not per_seed:
+        return None, None
+
+    seeds = list(per_seed)
+    n_seeds = len(seeds)
+    colors = plt.cm.tab10(np.arange(n_seeds) % 10)
+    rng = np.random.default_rng(0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8))
+    summary = {"seeds": seeds}
+
+    for ax, (key, name, bounds) in zip(axes, MEAN_OF_MEANS_METRICS):
+        # Seeds can hold different numbers of runs (DTW/NPL only score the trajectories found)
+        runs = [per_seed[seed][key] for seed in seeds]
+        means = np.array([vals.mean() for vals in runs])
+
+        for j, vals in enumerate(runs):
+            sd = vals.std(ddof=1) if len(vals) > 1 else np.nan
+            width = sd / np.sqrt(len(vals)) if spread == "sem" else sd
+            _gaussian_column(ax, j, means[j], width, colors[j])
+            if show_runs:
+                ax.scatter(j + rng.uniform(-0.08, 0.08, size=len(vals)), vals, s=8,
+                           color=colors[j], alpha=0.6, zorder=3)
+            ax.plot(j, means[j], "ko", ms=5, zorder=4)
+
+        # Mean of means; CI from the spread ACROSS seeds
+        grand = means.mean()
+        if n_seeds > 1:
+            sem = means.std(ddof=1) / np.sqrt(n_seeds)
+            half = t.ppf(0.975, n_seeds - 1) * sem
+            ax.axhspan(grand - half, grand + half, color="crimson", alpha=0.1,
+                       label="95% CI across seeds")
+        else:
+            half = np.nan
+        ax.axhline(grand, color="crimson", lw=1.5,
+                   label=f"mean of means = {grand:.3f}")
+
+        if bounds is not None:
+            pad = 0.05 * (bounds[1] - bounds[0])
+            ax.set_ylim(bounds[0] - pad, bounds[1] + pad)
+
+        ax.set_title(name)
+        ax.set_xticks(range(n_seeds), [f"seed {s}" for s in seeds])
+        ax.grid(axis="y", alpha=0.3)
+        ax.legend(fontsize=8, loc="best")
+
+        summary[key] = {"mean_of_means": float(grand), "ci95_halfwidth": float(half),
+                        "per_seed_means": means}
+
+    fig.suptitle(f"{title}\nPer-seed Gaussians (width = {spread.upper()}, {n_seeds} seeds)")
+    fig.tight_layout()
+    return fig, summary

@@ -8,9 +8,6 @@ CONDA_ENVIRONMENT=semproj
 CONDA_ROOT=${HOME}/miniforge3
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-WANDB_GROUP=hard_rooms
-STORAGE=$SCRATCH/$WANDB_GROUP
-
 # eth_proxy gives the login node outbound internet (needed by conda/pip/wandb).
 module load eth_proxy
 
@@ -36,18 +33,44 @@ set -u
 
 mkdir -p "${SCRATCH}/.submitit"
 
+GROUP_NAME="hard_rooms"
+ROOM_PATHS=("rooms/cross_room.json" "rooms/C_maze.json" "rooms/medium_maze.json" "rooms/hard_maze.json")
+#SEEDS=(0 1 2 3 4)
+SEEDS=(0 4)
+OBSERVATION_NN=("mlp_observation" "cnn_observation")
+BACKBONE_NN=("lstm_backbone" "mlp_backbone")
+AUX_HEAD=True
+GOAL_RADIUS=16
+GAMMA=0.999
+EPISODE_LENGTH=4096
+# One timestamp for the whole sweep, so every SLURM job writes its seed under the same folder
+NOW=$(date +"%Y%m%d_%H%M%S")
+STORAGE=${SCRATCH}/${GROUP_NAME}
+
+# Hydra sweeps over comma-separated values: (a b c) -> a,b,c
+join() { local IFS=","; echo "$*"; }
+
 cd "${PROJECT_ROOT}"
+# Blocks until every SLURM job has finished. A failed job must not stop the
+# seeds that did finish from being plotted below.
 python scripts/train.py --multirun \
     hydra/launcher=euler \
     hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
-    env.room_path="rooms/cross_room.json","rooms/C_maze.json","rooms/medium_maze.json","rooms/hard_maze.json" \
-    env.goal_radius=16 \
-    wandb.group=hard_rooms \
-    seed=0,1,2,3,4 \
-    observation=mlp_observation,cnn_observation \
-    backbone=lstm_backbone,mlp_backbone \
-    head.auxiliary_head.enabled=False,True \
-    env.gamma=0.999 \
-    algorithm.max_steps=2048 \
-    storage=$
+    env.room_path="$(join "${ROOM_PATHS[@]}")" \
+    env.goal_radius="${GOAL_RADIUS}" \
+    wandb.group="${GROUP_NAME}" \
+    seed="$(join "${SEEDS[@]}")" \
+    observation="$(join "${OBSERVATION_NN[@]}")" \
+    backbone="$(join "${BACKBONE_NN[@]}")" \
+    head.auxiliary_head.enabled="$(join "${AUX_HEAD[@]}")" \
+    env.gamma="${GAMMA}" \
+    algorithm.max_steps="${EPISODE_LENGTH}" \
+    storage="${STORAGE}" \
+    timestamp="${NOW}" \
+    || echo "Some training jobs failed, plotting the seeds that finished" >&2
 
+# Mean-of-means plot per room and architecture, uploaded to W&B from this node
+python scripts/evaluate_metrics.py \
+    wandb.group="${GROUP_NAME}" \
+    storage="${STORAGE}" \
+    timestamp="${NOW}"

@@ -33,15 +33,29 @@ set -u
 
 mkdir -p "${SCRATCH}/.submitit"
 
+GROUP_NAME="lstm_fix_check"
+# One timestamp for the whole sweep, so every SLURM job writes its seed under the same folder
+NOW=$(date +"%Y%m%d_%H%M%S")
+STORAGE=${SCRATCH}/${GROUP_NAME}
+
 cd "${PROJECT_ROOT}"
+# Blocks until every SLURM job has finished. A failed job must not stop the
+# seeds that did finish from being plotted below.
 python scripts/train.py --multirun \
     hydra/launcher=euler \
     hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
     env.room_path="rooms/four_room.json" \
     env.goal_radius=16 \
-    wandb.group=lstm_fix_check \
     backbone=lstm_backbone \
-    seed=0,1,2,3,4
-    #observation=mlp_observation,cnn_observation \
- 
-    
+    seed=0,1,2,3,4 \
+    wandb.group="${GROUP_NAME}" \
+    storage="${STORAGE}" \
+    timestamp="${NOW}" \
+    || echo "Some training jobs failed, plotting the seeds that finished" >&2
+# Not swept for now: observation=mlp_observation,cnn_observation
+
+# Mean-of-means plot per room and architecture, uploaded to W&B from this node
+python scripts/evaluate_metrics.py \
+    wandb.group="${GROUP_NAME}" \
+    storage="${STORAGE}" \
+    timestamp="${NOW}"

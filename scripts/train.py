@@ -41,14 +41,14 @@ def main(cfg: DictConfig):
     grid_cell = cfg.observation.grid_cell.enabled
     auxiliary_head = cfg.head.auxiliary_head.enabled
 
+    architecture_name = (
+        f"encoder:{cfg.observation.name}_backbone:{cfg.backbone.name}_"
+        f"frame_stack:{frame_stack}_grid_cell:{grid_cell}_"
+        f"auxiliary_head:{auxiliary_head}"
+    )
+
     run_config = OmegaConf.to_container(cfg, resolve=True)
-    run_config.update({
-            "architecture_name": (
-                f"encoder:{cfg.observation.name}_backbone:{cfg.backbone.name}_"
-                f"frame_stack:{frame_stack}_grid_cell:{grid_cell}_"
-                f"auxiliary_head:{auxiliary_head}"
-            )
-        })
+    run_config.update({"architecture_name": architecture_name})
 
     with wandb.init(entity=cfg.wandb.entity, project=cfg.wandb.project, config=run_config,
                         group=cfg.wandb.group, name=f"{cfg.observation.name}_{cfg.backbone.name}_{cfg.algorithm.name}_seed_{cfg.seed}",
@@ -57,12 +57,14 @@ def main(cfg: DictConfig):
                               f"auxiliary_head:{auxiliary_head}", f"room:{cfg.env.room_path}"],
                         sync_tensorboard=True, reinit=True, mode=cfg.wandb.mode):
 
-        trial_name = wandb.run.name
-        log_dir = ROOT_DIR / "logs" / f"{trial_name}__{Path(cfg.env.room_path).stem}"
-        # Run id keeps parallel jobs (e.g. frame_stack on/off, same seed) from sharing a checkpoint dir
-        run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model") + f"_{wandb.run.id}"
-        run_dir = log_dir / run_name
-        
+        # The BPTT window isn't part of the architecture name, but a window sweep must not
+        # write every window's seeds into the same folder
+        storage_name = architecture_name + (f"_bptt:{cfg.backbone.bptt_window_size}"
+                                            if cfg.backbone.name == "lstm" else "")
+        sweep_storage = Path(cfg.storage)
+        room = Path(cfg.env.room_path).stem
+        run_dir = sweep_storage / "models" / str(cfg.timestamp) / room / storage_name / f"seed_{cfg.seed}"
+        metrics_dir = sweep_storage / "eval_metrics" / str(cfg.timestamp) / room / storage_name / f"seed_{cfg.seed}"
 
         num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
         ray_dim = np.array([cfg.env.ray_encoding, num_rays])
@@ -91,7 +93,7 @@ def main(cfg: DictConfig):
                                         ray_dim=ray_dim, num_envs=1, device=device)
         with torch.no_grad():
             frames = render_env.record_rollout(cfg.backbone.name, agent, 200, cfg)
-        custom_video_path = run_dir / "videos" / f"{trial_name}.mp4"
+        custom_video_path = run_dir / "videos" / f"rollout.mp4"
         save_video(frames, custom_video_path)
 
         wandb.log({
@@ -99,13 +101,14 @@ def main(cfg: DictConfig):
                     })
           
         # Evaluate metrics on a fixed starting and ending goal
-        """env.unwrapped.random_pos_flag = False
+        env.unwrapped.random_pos_flag = False
 
         evaluate_model_on_metrics(agent=agent, env=env,
                                         episodes=cfg.env.completion_rate_eps,
                                         nr_runs=cfg.env.mean_of_means_runs,
                                         json_path=cfg.env.room_path,
+                                        storage_path=metrics_dir,
                                         backbone_type=cfg.backbone.name)
-        """
+        
 if __name__ == "__main__":
     main()
