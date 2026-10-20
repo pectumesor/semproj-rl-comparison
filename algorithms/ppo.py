@@ -90,9 +90,7 @@ class MLPPPO(PPO):
         self.eval_interval = max(1, int(cfg.algorithm.get("eval_interval", 1)))
 
         # -- Early Stopping --
-        es_cfg = cfg.algorithm.early_stopping
-        self.early_stopping_enabled = bool(es_cfg.enabled)
-        self.early_stopper = ConvergenceMonitor(es_cfg)
+        self.early_stopper = ConvergenceMonitor(cfg.algorithm.early_stopping)
 
         # -- Auxiliary Flag --
         self.aux_flag = cfg.head.auxiliary_head.enabled
@@ -121,16 +119,19 @@ class MLPPPO(PPO):
 
             for _ in range(self.buffer.num_steps):
 
-                new_obs, _ = self.env.reset(done=done)
-                obs["rays"][done]    = new_obs["rays"][done]
-                obs["proprio"][done] = new_obs["proprio"][done]
+                # reset() re-casts every env's rays even when its mask is empty, so skip the no-op call
+                if done.any():
+                    new_obs, _ = self.env.reset(done=done)
+                    obs["rays"][done]    = new_obs["rays"][done]
+                    obs["proprio"][done] = new_obs["proprio"][done]
 
                 action, clipped_action, action_log_prob, action_mu, action_std, value = self.agent.select_action(obs)
                 next_obs, reward, terminated, truncated, info = self.env.step(clipped_action)
                 done = terminated | truncated
 
+                # Bootstrap time-limit cutoffs only: reaching the goal on the last step is a true terminal
                 bootstrap_val = self.agent.get_value(next_obs)
-                reward += self.gamma * bootstrap_val * truncated.float()
+                reward += self.gamma * bootstrap_val * (truncated & ~terminated).float()
 
                 self.buffer.store(
                     obs=obs,
@@ -490,7 +491,7 @@ class MLPPPO(PPO):
                 wandb.log(log_data)
 
             if run_dir is not None:
-                if eval_due and self.early_stopping_enabled and self.early_stopper.improved:
+                if eval_due and self.early_stopper.improved:
                     self.agent.save_model(run_dir / "best.pt", self.optimizer)
 
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
@@ -502,10 +503,7 @@ class MLPPPO(PPO):
                     f"[PPO] Early stopping at iteration={iteration}/{self.n_iterations}: "
                     f"eval success rate plateaued (best EMA={self.early_stopper.best:.4f})"
                 )
-                if self.early_stopper.train_best is not None:
-                    msg += f", train return plateaued (best EMA={self.early_stopper.train_best:.4f})"
                 print(msg)
-
                 if wandb.run is not None:
                     wandb.log({
                         f"Early stopping": iteration,
@@ -573,9 +571,11 @@ class RecurrentPPO(MLPPPO):
         with torch.no_grad():
             for _ in range(self.buffer.num_steps):
 
-                new_obs, _ = self.env.reset(done=done)
-                obs["rays"][done]    = new_obs["rays"][done]
-                obs["proprio"][done] = new_obs["proprio"][done]
+                # reset() re-casts every env's rays even when its mask is empty, so skip the no-op call
+                if done.any():
+                    new_obs, _ = self.env.reset(done=done)
+                    obs["rays"][done]    = new_obs["rays"][done]
+                    obs["proprio"][done] = new_obs["proprio"][done]
 
                 # Auxiliary Loss: Reset trajectories here, then label the current position p_t
                 # (before env.step) so the label matches obs_t and the hidden state computed from it
@@ -593,8 +593,9 @@ class RecurrentPPO(MLPPPO):
                 next_obs, reward, terminated, truncated, info = self.env.step(action_clipped)
                 done = terminated | truncated
 
+                # Bootstrap time-limit cutoffs only: reaching the goal on the last step is a true terminal
                 bootstrap_val = self.agent.get_value(next_obs, lstm_state, torch.zeros_like(done))
-                reward += self.gamma * bootstrap_val * truncated.float()
+                reward += self.gamma * bootstrap_val * (truncated & ~terminated).float()
 
                 # fill buffer
                 self.buffer.store(
@@ -904,7 +905,7 @@ class RecurrentPPO(MLPPPO):
                 wandb.log(log_data)
 
             if run_dir is not None:
-                if eval_due and self.early_stopping_enabled and self.early_stopper.improved:
+                if eval_due and self.early_stopper.improved:
                     self.agent.save_model(run_dir / "best.pt", self.optimizer)
 
                 if iteration % self.save_interval == 0 or iteration == self.n_iterations:
@@ -916,10 +917,7 @@ class RecurrentPPO(MLPPPO):
                     f"[PPO] Early stopping at iteration={iteration}/{self.n_iterations}: "
                     f"eval success rate plateaued (best EMA={self.early_stopper.best:.4f})"
                 )
-                if self.early_stopper.train_best is not None:
-                    msg += f", train return plateaued (best EMA={self.early_stopper.train_best:.4f})"
                 print(msg)
-
                 if wandb.run is not None:
                     wandb.log({
                         f"Early stopping": iteration,

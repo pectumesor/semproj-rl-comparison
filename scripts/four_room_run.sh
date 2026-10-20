@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Under sbatch the script runs from a copy in /var/spool/slurm, so BASH_SOURCE
+# points there; resolve the repo from the submission directory instead.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    PROJECT_ROOT="$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)"
+else
+    PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 
 GROUP_NAME="four_room_test"
 # One timestamp for the whole sweep, so every job writes its seed under the same folder

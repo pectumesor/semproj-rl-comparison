@@ -40,6 +40,7 @@ def create_observation_model(frame_stack: bool, observation_type: str, ray_dim: 
         else:
             return CNNObservationEmbeddings(ray_channels=cfg.env.ray_encoding,
                                         cnn_out_channels=cfg.observation.cnn_output_channels,
+                                        num_rays=int(ray_dim[-1]),
                                         proprio_dim=cfg.env.proprio_dim,
                                         proprio_hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
                                         out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],

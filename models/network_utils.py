@@ -55,13 +55,18 @@ def build_cnn(
 
 
 def build_cnn1d(input_channels: int, out_channels: int) -> nn.Sequential:
-    """1-D CNN for ray observations (B, C, num_rays). Global-average-pools to (B, out_channels)."""
+    """1-D CNN for ray observations (B, C, num_rays). Flattens to (B, out_channels * (num_rays // 2)).
+
+    The ray index encodes bearing, so the ray axis is kept (flattened) rather than globally pooled:
+    global pooling would make the features invariant to where the goal/walls are in the FOV.
+    """
     return nn.Sequential(
         nn.Conv1d(input_channels, out_channels // 2, kernel_size=3, padding=1),
         nn.ReLU(),
         nn.Conv1d(out_channels // 2, out_channels, kernel_size=3, padding=1),
         nn.ReLU(),
-        nn.AdaptiveAvgPool1d(1),   # (B, out_channels, 1)
+        nn.MaxPool1d(kernel_size=2),   # (B, out_channels, num_rays // 2)
+        nn.Flatten(1),                 # (B, out_channels * (num_rays // 2))
     )
 
 

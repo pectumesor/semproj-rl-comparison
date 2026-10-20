@@ -69,12 +69,11 @@ class ConvergenceMonitor:
 
     def step(self, eval_success_rate: float) -> bool:
         """Returns True once training is considered converged."""
-        if not self.enabled:
-            return False
-
+        # Always track the EMA, even with early stopping disabled: `improved` also decides
+        # when best.pt is written, which train.py loads after training
         eval_converged = self.eval_stopper.step(eval_success_rate)
 
-        return eval_converged
+        return self.enabled and eval_converged
 
     @property
     def improved(self) -> bool:

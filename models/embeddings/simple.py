@@ -32,6 +32,7 @@ class CNNObservationEmbeddings(nn.Module):
     Args:
         ray_channels:         input channels of the ray matrix (7 for current env)
         cnn_out_channels:     output channels of the 1-D CNN
+        num_rays:             number of rays (length of the ray axis)
         proprio_dim:          length of the proprio vector (4)
         proprio_hidden_sizes: hidden sizes for the proprio MLP
         feature_dim:          output dimension after fusion
@@ -41,6 +42,7 @@ class CNNObservationEmbeddings(nn.Module):
         self,
         ray_channels: int,
         cnn_out_channels: int,
+        num_rays: int,
         proprio_dim: int,
         proprio_hidden_sizes: Sequence[int],
         out_feature_dim: int,
@@ -48,11 +50,11 @@ class CNNObservationEmbeddings(nn.Module):
         super().__init__()
         self.cnn        = build_cnn1d(ray_channels, cnn_out_channels)
         self.proprio_net = build_mlp(proprio_dim, proprio_hidden_sizes, proprio_hidden_sizes[-1])
-        self.fusion      = nn.Linear(cnn_out_channels + proprio_hidden_sizes[-1], out_feature_dim)
+        self.fusion      = nn.Linear(cnn_out_channels * (num_rays // 2) + proprio_hidden_sizes[-1], out_feature_dim)
 
     def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
         # rays:    (B, ray_channels, num_rays)
         # proprio: (B, proprio_dim)
-        cnn_feat    = self.cnn(rays).squeeze(-1)      # (B, cnn_out_channels)
+        cnn_feat    = self.cnn(rays)                  # (B, cnn_out_channels * (num_rays // 2))
         proprio_feat = self.proprio_net(proprio)       # (B, proprio_hidden_sizes[-1])
         return self.fusion(torch.cat([cnn_feat, proprio_feat], dim=-1))  # (B, feature_dim)

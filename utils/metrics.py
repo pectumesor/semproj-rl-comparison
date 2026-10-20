@@ -139,7 +139,9 @@ def completion_rate_recurrent(agent, env, episodes):
         active  = torch.ones(num_envs, dtype=torch.bool, device=env.device)
         reached = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
 
-        while active.any():
+        # Only the first `take` envs are scored, so stop once those have finished
+        take = min(num_envs, episodes - counted)
+        while active[:take].any():
             with torch.no_grad():
                 action, lstm_state = agent.predict_action(obs, lstm_state, done)
             obs, _, terminated, truncated, _ = env.step(action)
@@ -148,7 +150,6 @@ def completion_rate_recurrent(agent, env, episodes):
             reached |= terminated & active
             active  &= ~done
 
-        take = min(num_envs, episodes - counted)
         completed += int(reached[:take].sum().item())
         counted += take
 
@@ -172,7 +173,9 @@ def completion_rate_mlp(agent, env, episodes):
         active  = torch.ones(num_envs, dtype=torch.bool, device=env.device)
         reached = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
 
-        while active.any():
+        # Only the first `take` envs are scored, so stop once those have finished
+        take = min(num_envs, episodes - counted)
+        while active[:take].any():
             with torch.no_grad():
                 action = agent.predict_action(obs)
             obs, _, terminated, truncated, _ = env.step(action)
@@ -180,7 +183,6 @@ def completion_rate_mlp(agent, env, episodes):
             reached |= terminated & active
             active  &= ~(terminated | truncated)
 
-        take = min(num_envs, episodes - counted)
         completed += int(reached[:take].sum().item())
         counted += take
 
@@ -256,9 +258,11 @@ def evaluate_model_on_metrics(agent, env, episodes,
         cr = completion_rate_recurrent
 
     if nr_traj_found == 0: # Untrained/bad policy, no successful trajectories found
+        # CR is genuinely 0. DTW and NPL are undefined without a trajectory, and 0 would read as a
+        # perfect score, so they are saved empty and plot_mean_of_means leaves this seed out of them
         cr_values = np.zeros(nr_runs)
-        dtw_values = np.zeros(nr_runs)
-        npl_values = np.zeros(nr_runs)
+        dtw_values = np.array([])
+        npl_values = np.array([])
 
     else:
         # CR rolls out its own episodes; DTW and NPL score the goal-reaching rollouts found,
@@ -326,31 +330,42 @@ def plot_mean_of_means(metric_dir, title="", spread="sem", show_runs=True):
 
     seeds = list(per_seed)
     n_seeds = len(seeds)
-    colors = plt.cm.tab10(np.arange(n_seeds) % 10)
+    seed_colors = dict(zip(seeds, plt.cm.tab10(np.arange(n_seeds) % 10)))  # same colour per seed in every panel
     rng = np.random.default_rng(0)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.8))
     summary = {"seeds": seeds}
 
     for ax, (key, name, bounds) in zip(axes, MEAN_OF_MEANS_METRICS):
-        # Seeds can hold different numbers of runs (DTW/NPL only score the trajectories found)
-        runs = [per_seed[seed][key] for seed in seeds]
+        # Seeds can hold different numbers of runs (DTW/NPL only score the trajectories found),
+        # and none at all for DTW/NPL when the policy never reached the goal
+        metric_seeds = [seed for seed in seeds if len(per_seed[seed][key]) > 0]
+        runs = [per_seed[seed][key] for seed in metric_seeds]
         means = np.array([vals.mean() for vals in runs])
+        n_metric_seeds = len(metric_seeds)
+
+        if n_metric_seeds == 0:
+            ax.text(0.5, 0.5, "no goal-reaching trajectories", ha="center", va="center",
+                    transform=ax.transAxes)
+            ax.set_title(name)
+            summary[key] = {"mean_of_means": float("nan"), "ci95_halfwidth": float("nan"),
+                            "per_seed_means": means}
+            continue
 
         for j, vals in enumerate(runs):
             sd = vals.std(ddof=1) if len(vals) > 1 else np.nan
             width = sd / np.sqrt(len(vals)) if spread == "sem" else sd
-            _gaussian_column(ax, j, means[j], width, colors[j])
+            _gaussian_column(ax, j, means[j], width, seed_colors[metric_seeds[j]])
             if show_runs:
                 ax.scatter(j + rng.uniform(-0.08, 0.08, size=len(vals)), vals, s=8,
-                           color=colors[j], alpha=0.6, zorder=3)
+                           color=seed_colors[metric_seeds[j]], alpha=0.6, zorder=3)
             ax.plot(j, means[j], "ko", ms=5, zorder=4)
 
         # Mean of means; CI from the spread ACROSS seeds
         grand = means.mean()
-        if n_seeds > 1:
-            sem = means.std(ddof=1) / np.sqrt(n_seeds)
-            half = t.ppf(0.975, n_seeds - 1) * sem
+        if n_metric_seeds > 1:
+            sem = means.std(ddof=1) / np.sqrt(n_metric_seeds)
+            half = t.ppf(0.975, n_metric_seeds - 1) * sem
             ax.axhspan(grand - half, grand + half, color="crimson", alpha=0.1,
                        label="95% CI across seeds")
         else:
@@ -363,7 +378,7 @@ def plot_mean_of_means(metric_dir, title="", spread="sem", show_runs=True):
             ax.set_ylim(bounds[0] - pad, bounds[1] + pad)
 
         ax.set_title(name)
-        ax.set_xticks(range(n_seeds), [f"seed {s}" for s in seeds])
+        ax.set_xticks(range(n_metric_seeds), [f"seed {s}" for s in metric_seeds])
         ax.grid(axis="y", alpha=0.3)
         ax.legend(fontsize=8, loc="best")
 

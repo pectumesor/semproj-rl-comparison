@@ -6,7 +6,13 @@ PROJECT_NAME=semproj
 SCRATCH=/cluster/scratch/${ETH_USERNAME}/${PROJECT_NAME}
 CONDA_ENVIRONMENT=semproj
 CONDA_ROOT=${HOME}/miniforge3
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Under sbatch the script runs from a copy in /var/spool/slurm, so BASH_SOURCE
+# points there; resolve the repo from the submission directory instead.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    PROJECT_ROOT="$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)"
+else
+    PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 
 # eth_proxy gives the login node outbound internet (needed by conda/pip/wandb).
 module load eth_proxy
@@ -31,8 +37,6 @@ else
 fi
 set -u
 
-mkdir -p "${SCRATCH}/.submitit"
-
 GROUP_NAME="aux_loss_test"
 # One timestamp for the whole sweep, so every SLURM job writes its seed under the same folder
 NOW=$(date +"%Y%m%d_%H%M%S")
@@ -43,7 +47,7 @@ cd "${PROJECT_ROOT}"
 # seeds that did finish from being plotted below.
 python scripts/train.py --multirun \
     hydra/launcher=euler \
-    hydra.launcher.submitit_folder="${SCRATCH}/.submitit/%j" \
+    hydra.launcher.submitit_folder="${STORAGE}/logs/%j" \
     env.room_path="rooms/four_room.json" \
     env.goal_radius=16 \
     seed=0,1,2,3,4 \

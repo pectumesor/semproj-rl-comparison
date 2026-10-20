@@ -6,7 +6,13 @@ PROJECT_NAME=semproj
 SCRATCH=/cluster/scratch/${ETH_USERNAME}/${PROJECT_NAME}
 CONDA_ENVIRONMENT=semproj
 CONDA_ROOT=${HOME}/miniforge3
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Under sbatch the script runs from a copy in /var/spool/slurm, so BASH_SOURCE
+# points there; resolve the repo from the submission directory instead.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    PROJECT_ROOT="$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)"
+else
+    PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 
 # Re-plots the mean of means of an already finished sweep, e.g. if the node that launched
 # it died before running evaluate_metrics.py. Reads ${STORAGE}/eval_metrics/${TIMESTAMP}/
