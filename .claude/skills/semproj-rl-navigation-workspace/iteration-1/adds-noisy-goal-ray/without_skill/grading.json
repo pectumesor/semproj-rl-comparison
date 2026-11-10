@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "A noisy oracle goal condition is added to the config (a new goal_info value and/or noise std keys) with a comment, and the default behaviour of existing goal_info values is unchanged.",
+      "passed": true,
+      "evidence": "New goal_info value noisy_oracle plus an information.goal_noise block (bearing 15\u00b0, relative distance 0.1) with comments; existing modes unchanged."
+    },
+    {
+      "text": "The noise is applied in a vectorised way over all envs (no Python loop over envs) and the goal information slot keeps its 5-dim size.",
+      "passed": true,
+      "evidence": "_noisy_offset uses torch.randn_like on (E,) tensors; the 5-dim slot is kept (proprio 135 with reserved slots)."
+    },
+    {
+      "text": "The new setting (the condition and its noise std) ends up in variant_name in scripts/train.py or is otherwise guaranteed to be part of the storage name.",
+      "passed": true,
+      "evidence": "variant_name appends -bearing-distance when goal_info == noisy_oracle."
+    },
+    {
+      "text": "The run executes a smoke training run or a focused test that exercises the new condition, and reports the result.",
+      "passed": true,
+      "evidence": "New test passes; after the harness fix, all 15 tests pass and MLP and LSTM smoke runs exit 0."
+    },
+    {
+      "text": "No git commit or push is made.",
+      "passed": true,
+      "evidence": "git log has only harness commits; changes are uncommitted."
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

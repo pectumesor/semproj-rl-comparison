@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "The analysis uses one value per training seed (5 per backbone) as the unit for the comparison, rather than pooling the 50 individual eval runs per backbone.",
+      "passed": true,
+      "evidence": "Averages the 10 runs per seed first; n = 5 per arm; Welch t(6.5)."
+    },
+    {
+      "text": "The response concludes the LSTM\u2013MLP difference on four_room is not statistically significant (a seed-level test gives p well above 0.05, about 0.3).",
+      "passed": true,
+      "evidence": "AUC p = 0.052, CR p = 0.32; 'not significant at the pre-registered \u03b1 = 0.01, and not at 0.05 either'."
+    },
+    {
+      "text": "The response reports per-backbone success with an uncertainty estimate across seeds (CI, standard error, or IQM with bootstrap CI).",
+      "passed": true,
+      "evidence": "Mean \u00b1 SE and IQM with 95% bootstrap CI per backbone; P(improvement) with CI."
+    },
+    {
+      "text": "The response points out that seeds 0\u20134 include the screening seeds (0\u20132) that should not be used for reported/final results, or otherwise recommends fresh seeds for the paper claim.",
+      "passed": true,
+      "evidence": "Flags the plan conflict: E1 seeds 0\u20134 vs the screening-seed rule; suggests rerunning on 1000\u20131009."
+    },
+    {
+      "text": "The paper-ready statement does not claim that the LSTM is significantly better than the MLP.",
+      "passed": true,
+      "evidence": "The paper sentence frames the result as a non-significant trend."
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

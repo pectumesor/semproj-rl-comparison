@@ -37,32 +37,52 @@ else
 fi
 set -u
 
-GROUP_NAME="euler_gpu_test"
-# One timestamp for the whole sweep, so every SLURM job writes its seed under the same folder
-NOW=$(date +"%Y%m%d_%H%M%S")
+# CNN encoder + LSTM backbone + loop closure, added to the running Stage 2: its aux configs stay on Stage 1's MLP
+# encoder, so without this one Stage 3's "best combined" could only pair the CNN + LSTM with aux untested. Depth
+# aux stays out: unmasked its target is in the policy's input, masked the agent can't see the walls. Same base
+# settings, rooms, seeds, storage and timestamp as e4_cnn_lstm.sh, which is its matched aux-off reference:
+#   sbatch ... scripts/e4_cnn_lstm_aux.sh
+GROUP_NAME=e4_stage2
 STORAGE=${SCRATCH}/${GROUP_NAME}
+NOW=20261104133601
+GOAL_RADIUS=16
+LSTM_LR=3e-4
+
+# Keep W&B and Hydra off the home folder's file quota
+export WANDB_DIR=${STORAGE}/wandb
+export WANDB_CACHE_DIR=${STORAGE}/wandb/cache
+export WANDB_DATA_DIR=${STORAGE}/wandb/data
+mkdir -p "${WANDB_DIR}" "${WANDB_CACHE_DIR}" "${WANDB_DATA_DIR}"
 
 cd "${PROJECT_ROOT}"
-# Blocks until every SLURM job has finished. A failed job must not stop the
-# seeds that did finish from being plotted below.
 python scripts/train.py --multirun \
     hydra/launcher=euler \
+    hydra.sweep.dir="${STORAGE}/multirun/cnn_lstm_aux" \
     hydra.launcher.submitit_folder="${STORAGE}/logs/%j" \
-    hydra.launcher.gpus_per_node=1 \
-    env.room_path="rooms/four_room.json" \
-    env.goal_radius=16 \
-    env.goal_pos.x=40 \
-    env.goal_pos.y=40 \
-    observation=mlp_observation,cnn_observation \
-    backbone=lstm_backbone,mlp_backbone \
-    seed=0,1,2,3,4 \
+    hydra.launcher.timeout_min=1440 \
+    env.room_path=rooms/medium_maze.json,rooms/hard_maze.json \
+    env.goal_radius="${GOAL_RADIUS}" \
+    env.colour_mode=off \
+    env.goal_mode=random \
+    algorithm.max_steps=4096 \
+    algorithm.lr="${LSTM_LR}" \
     wandb.group="${GROUP_NAME}" \
+    seed=100,101,102,103,104 \
     storage="${STORAGE}" \
     timestamp="${NOW}" \
+    env.gamma=0.999 \
+    observation=cnn_observation \
+    env.fov=180 \
+    env.collision_penalty=0.01 \
+    backbone=lstm_backbone \
+    head.auxiliary_head.enabled=true \
+    head.auxiliary_head.depth_coeff=0.0 \
+    head.auxiliary_head.loop_closure_coeff=1.0 \
     || echo "Some training jobs failed, plotting the seeds that finished" >&2
 
-# Mean-of-means plot per room and architecture, uploaded to W&B from this node
 python scripts/evaluate_metrics.py \
     wandb.group="${GROUP_NAME}" \
     storage="${STORAGE}" \
-    timestamp="${NOW}"
+    timestamp="${NOW}" \
+    hydra.run.dir="${STORAGE}/hydra" \
+    hydra.output_subdir=null

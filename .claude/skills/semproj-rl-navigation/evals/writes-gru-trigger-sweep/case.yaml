@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: writes-gru-trigger-sweep
+expected_outcome: |
+  A new self-contained Euler sweep script in scripts/ in the style of the existing ones that runs backbone=gru_backbone on C_maze and medium_maze with exactly the triggering E1 condition (colour off, random goal, the long-room episode length/gamma and timeout used by E1, same goal radius and seeds as E1 so it is comparable), followed by evaluate_metrics.py. It is not executed and nothing is committed. The reply notes the GRU result must be reported whatever the outcome (not as best-of-LSTM-and-GRU).

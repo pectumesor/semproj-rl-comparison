@@ -15,18 +15,19 @@ Script with metric function to test the performance of trained policies
 
 """
 
+def initial_recurrent_state(agent, num_envs, device):
+    """Zero (hidden, cell) state of the agent's recurrent backbone (LSTM or GRU)."""
+    num_layers = agent.backbone_model.num_layers
+    hidden_size = agent.backbone_model.hidden_size
+    return (
+            torch.zeros((num_layers, num_envs, hidden_size), dtype=torch.float, device=device),
+            torch.zeros((num_layers, num_envs, hidden_size), dtype=torch.float, device=device)
+            )
+
 def extract_trajectory_recurrent(agent, env, nr_runs):
 
-    num_layers = agent.backbone_model.lstm.num_layers
-    hidden_size = agent.backbone_model.lstm.hidden_size
-
     obs, info = env.reset()
-    lstm_state = (
-                    torch.zeros((num_layers, env.num_envs, hidden_size),
-                                dtype=torch.float, device=env.device),
-                    torch.zeros((num_layers, env.num_envs, hidden_size),
-                                 dtype=torch.float, device=env.device)
-                    )
+    lstm_state = initial_recurrent_state(agent, env.num_envs, env.device)
     # Episode-start flag fed to the LSTM on the *next* step: True for an env that
     # was just reset (terminated *or* truncated), so SimpleLSTM.forward zeroes its
     # hidden state instead of leaking it into the fresh episode.
@@ -38,7 +39,7 @@ def extract_trajectory_recurrent(agent, env, nr_runs):
     buffer   = torch.zeros(env.num_envs, max_len, 2, device=env.device)
     buffer[:, 0] = info["agent_pos"]
 
-    trajectories = []
+    trajectories, goals = [], []
     print("Extracting trajectories...")
     # Each iteration is one env step, so after a few horizons every env has finished several
     # episodes; a policy that still hasn't reached the goal by then is not going to
@@ -53,10 +54,12 @@ def extract_trajectory_recurrent(agent, env, nr_runs):
         buffer[env_ids, step_idx] = info["agent_pos"]
 
         if done.any():
-            term_ids = terminated.nonzero(as_tuple=True)[0]
-            buffer[term_ids, step_idx[term_ids]] = env.unwrapped.goal_pos
+            # Only goal-reaching episodes count; terminated also covers failures (wrong goal region)
+            term_ids = info["success"].nonzero(as_tuple=True)[0]
+            buffer[term_ids, step_idx[term_ids]] = env.unwrapped.goal_pos[term_ids]
             for i in term_ids.tolist():
                 trajectories.append(buffer[i, :step_idx[i] + 1].cpu().numpy().copy())
+                goals.append(env.unwrapped.goal_pos[i].cpu().numpy().copy())
 
             reset_ids = done.nonzero(as_tuple=True)[0]
             obs, info = env.reset(done=done)
@@ -67,7 +70,7 @@ def extract_trajectory_recurrent(agent, env, nr_runs):
 
     nr_traj_found = min(len(trajectories), nr_runs) # will be == nr_runs if we succeed, otherwise less if cutt off
 
-    return trajectories[:nr_traj_found], nr_traj_found
+    return trajectories[:nr_traj_found], goals[:nr_traj_found], nr_traj_found
 
 def extract_trajectory_mlp(agent, env, nr_runs):
 
@@ -75,7 +78,7 @@ def extract_trajectory_mlp(agent, env, nr_runs):
      Unroll the agent (vectorized across env.num_envs parallel envs) until
      nr_runs goal-reaching trajectories have been collected. An env that gets
      truncated before reaching the goal is reset and its trajectory discarded.
-     Return a list of nr_runs trajectories, each a (T_i, 2) numpy array.
+     Return nr_runs trajectories, each a (T_i, 2) numpy array, and the goal each one reached.
     """
     obs, info = env.reset()
 
@@ -85,7 +88,7 @@ def extract_trajectory_mlp(agent, env, nr_runs):
     buffer   = torch.zeros(env.num_envs, max_len, 2, device=env.device)
     buffer[:, 0] = info["agent_pos"]
 
-    trajectories = []
+    trajectories, goals = [], []
     print("Extracting trajectories...")
     # Each iteration is one env step, so after a few horizons every env has finished several
     # episodes; a policy that still hasn't reached the goal by then is not going to
@@ -100,10 +103,12 @@ def extract_trajectory_mlp(agent, env, nr_runs):
 
         reset_mask = terminated | truncated
         if reset_mask.any():
-            term_ids = terminated.nonzero(as_tuple=True)[0]
-            buffer[term_ids, step_idx[term_ids]] = env.unwrapped.goal_pos
+            # Only goal-reaching episodes count; terminated also covers failures (wrong goal region)
+            term_ids = info["success"].nonzero(as_tuple=True)[0]
+            buffer[term_ids, step_idx[term_ids]] = env.unwrapped.goal_pos[term_ids]
             for i in term_ids.tolist():
                 trajectories.append(buffer[i, :step_idx[i] + 1].cpu().numpy().copy())
+                goals.append(env.unwrapped.goal_pos[i].cpu().numpy().copy())
 
             reset_ids = reset_mask.nonzero(as_tuple=True)[0]
             obs, info = env.reset(done=reset_mask)
@@ -114,79 +119,108 @@ def extract_trajectory_mlp(agent, env, nr_runs):
 
     nr_traj_found = min(len(trajectories), nr_runs) # will be == nr_runs if we succeed, otherwise less if cutt off
 
-    return trajectories[:nr_traj_found], nr_traj_found
+    return trajectories[:nr_traj_found], goals[:nr_traj_found], nr_traj_found
 
-def completion_rate_recurrent(agent, env, episodes):
+def success_weighted_path_length(success, actual_lengths, starts, goals, json_path):
+    """
+    SPL (Anderson et al. 2018): mean over episodes of success * shortest / max(actual, shortest),
+    with the shortest path from the navigation mesh between each episode's own start and goal.
+    """
+    spl = np.zeros(len(success))
+    for i in np.flatnonzero(success):
+        shortest = path_length(generate_reference_trajectory(json_path, start=starts[i], end=goals[i], log=False))
+        spl[i] = shortest / max(actual_lengths[i], shortest, 1e-8)
+    return float(spl.mean())
 
+def completion_rate_recurrent(agent, env, episodes, json_path):
 
-    num_layers = agent.backbone_model.lstm.num_layers
-    hidden_size = agent.backbone_model.lstm.hidden_size
+    """Recurrent counterpart of completion_rate_mlp, returns (completion rate [%], SPL)."""
+
     num_envs = env.num_envs
-    completed = 0
+    success_all, lengths_all, starts_all, goals_all = [], [], [], []
     counted = 0
 
     while counted < episodes:
-        obs, _ = env.reset()
+        obs, info = env.reset()
         # Fresh hidden state per batch — a new set of episodes must not inherit
         # the LSTM state left over from the previous batch's final step.
-        lstm_state = (
-                        torch.zeros((num_layers, num_envs, hidden_size),
-                                            dtype=torch.float, device=env.device),
-                        torch.zeros((num_layers, num_envs, hidden_size),
-                                             dtype=torch.float, device=env.device)
-                    )
+        lstm_state = initial_recurrent_state(agent, num_envs, env.device)
         done    = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
         active  = torch.ones(num_envs, dtype=torch.bool, device=env.device)
         reached = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
+        starts  = info["agent_pos"].clone()
+        goals   = env.unwrapped.goal_pos.clone()
+        prev_pos = starts.clone()
+        travelled = torch.zeros(num_envs, device=env.device)
 
         # Only the first `take` envs are scored, so stop once those have finished
         take = min(num_envs, episodes - counted)
         while active[:take].any():
             with torch.no_grad():
                 action, lstm_state = agent.predict_action(obs, lstm_state, done)
-            obs, _, terminated, truncated, _ = env.step(action)
+            obs, _, terminated, truncated, info = env.step(action)
             done = terminated | truncated
 
-            reached |= terminated & active
+            travelled += torch.norm(info["agent_pos"] - prev_pos, dim=-1) * active
+            prev_pos = info["agent_pos"].clone()
+            reached |= info["success"] & active
             active  &= ~done
 
-        completed += int(reached[:take].sum().item())
+        success_all.append(reached[:take].cpu().numpy())
+        lengths_all.append(travelled[:take].cpu().numpy())
+        starts_all.append(starts[:take].cpu().numpy())
+        goals_all.append(goals[:take].cpu().numpy())
         counted += take
 
-    return (completed / episodes) * 100
+    success = np.concatenate(success_all)
+    spl = success_weighted_path_length(success, np.concatenate(lengths_all),
+                                       np.concatenate(starts_all), np.concatenate(goals_all), json_path)
+    return success.mean() * 100, spl
 
-def completion_rate_mlp(agent, env, episodes):
+def completion_rate_mlp(agent, env, episodes, json_path):
 
     """
-    Return the episode completion rate of the trained policy in percentage.
-    Episodes are rolled out in parallel across env.num_envs; batches repeat until
-    at least `episodes` episodes have been scored (the last batch is trimmed so
+    Return the episode completion rate of the trained policy in percentage, and the SPL of
+    the same episodes. Episodes are rolled out in parallel across env.num_envs; batches repeat
+    until at least `episodes` episodes have been scored (the last batch is trimmed so
     exactly `episodes` count toward the rate).
     """
 
     num_envs = env.num_envs
-    completed = 0
+    success_all, lengths_all, starts_all, goals_all = [], [], [], []
     counted = 0
 
     while counted < episodes:
-        obs, _ = env.reset()
+        obs, info = env.reset()
         active  = torch.ones(num_envs, dtype=torch.bool, device=env.device)
         reached = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
+        starts  = info["agent_pos"].clone()
+        goals   = env.unwrapped.goal_pos.clone()
+        prev_pos = starts.clone()
+        travelled = torch.zeros(num_envs, device=env.device)
 
         # Only the first `take` envs are scored, so stop once those have finished
         take = min(num_envs, episodes - counted)
         while active[:take].any():
             with torch.no_grad():
                 action = agent.predict_action(obs)
-            obs, _, terminated, truncated, _ = env.step(action)
+            obs, _, terminated, truncated, info = env.step(action)
 
-            reached |= terminated & active
+            travelled += torch.norm(info["agent_pos"] - prev_pos, dim=-1) * active
+            prev_pos = info["agent_pos"].clone()
+            reached |= info["success"] & active
             active  &= ~(terminated | truncated)
 
-        completed += int(reached[:take].sum().item())
+        success_all.append(reached[:take].cpu().numpy())
+        lengths_all.append(travelled[:take].cpu().numpy())
+        starts_all.append(starts[:take].cpu().numpy())
+        goals_all.append(goals[:take].cpu().numpy())
         counted += take
 
-    return (completed / episodes) * 100
+    success = np.concatenate(success_all)
+    spl = success_weighted_path_length(success, np.concatenate(lengths_all),
+                                       np.concatenate(starts_all), np.concatenate(goals_all), json_path)
+    return success.mean() * 100, spl
 
 def _resample_polyline(points: np.ndarray, n_points: int) -> np.ndarray:
     """Resample a polyline to exactly `n_points`, evenly spaced by arc length (endpoints kept)."""
@@ -240,65 +274,122 @@ def normalized_path_length(test_trajectory, reference_trajectory):
 
     return -1 if len(test_trajectory) == 0 else path_length(test_trajectory) / path_length(reference_trajectory)
 
+def normalized_dynamic_time_warping(test_trajectory, reference_trajectory, success_radius):
+    """
+    nDTW (Ilharco et al. 2019): exp(-DTW / (|R| * d_th)) in [0, 1], higher is better, with
+    d_th the success radius. The reference is resampled to the test trajectory's length
+    inside dynamic_time_warping, so |R| = len(test_trajectory).
+    """
+    dtw = dynamic_time_warping(test_trajectory, reference_trajectory)
+    if dtw < 0:
+        return -1
+    return float(np.exp(-dtw / (len(test_trajectory) * success_radius)))
+
 def evaluate_model_on_metrics(agent, env, episodes,
                                nr_runs, json_path, storage_path, backbone_type):
     """
     Score one trained seed and save its raw per-run values to storage_path as
-    {cr,dtw,npl}_values.npy. plot_mean_of_means later aggregates the seed folders.
+    {cr,spl,dtw,ndtw,npl}_values.npy. plot_mean_of_means later aggregates the seed folders.
+
+    Every trajectory is compared with the shortest path between its own start and goal, so this
+    also works with random starts/goals (with a fixed start and goal it is the room JSON's path).
     """
 
-    reference_trajectory = generate_reference_trajectory(json_path)
+    # Logs the room and its start_pos -> goal_pos reference to W&B, as before
+    generate_reference_trajectory(json_path)
+    success_radius = env.unwrapped.goal_radius
 
     # For Means of Means increase the nr_runs to > 1
     if backbone_type == "mlp":
-        trajectory, nr_traj_found = extract_trajectory_mlp(agent, env, nr_runs)
+        trajectory, goals, nr_traj_found = extract_trajectory_mlp(agent, env, nr_runs)
         cr = completion_rate_mlp
     else:
-        trajectory, nr_traj_found = extract_trajectory_recurrent(agent, env, nr_runs)
+        trajectory, goals, nr_traj_found = extract_trajectory_recurrent(agent, env, nr_runs)
         cr = completion_rate_recurrent
 
     if nr_traj_found == 0: # Untrained/bad policy, no successful trajectories found
-        # CR is genuinely 0. DTW and NPL are undefined without a trajectory, and 0 would read as a
-        # perfect score, so they are saved empty and plot_mean_of_means leaves this seed out of them
+        # CR and SPL are genuinely 0. DTW, nDTW and NPL are undefined without a trajectory, and 0 would read as a
+        # perfect DTW, so they are saved empty and plot_mean_of_means leaves this seed out of them
         cr_values = np.zeros(nr_runs)
+        spl_values = np.zeros(nr_runs)
         dtw_values = np.array([])
+        ndtw_values = np.array([])
         npl_values = np.array([])
 
     else:
-        # CR rolls out its own episodes; DTW and NPL score the goal-reaching rollouts found,
+        # CR/SPL roll out their own episodes; DTW and NPL score the goal-reaching rollouts found,
         # which can be fewer than nr_runs if the extraction hit its cutoff
-        cr_values = np.array([cr(agent, env, episodes)
-                              for _ in tqdm(range(nr_runs), desc="Evaluating completion rate")])
-        dtw_values = np.array([dynamic_time_warping(traj, reference_trajectory) for traj in trajectory])
-        npl_values = np.array([normalized_path_length(traj, reference_trajectory) for traj in trajectory])
+        cr_spl = np.array([cr(agent, env, episodes, json_path)
+                           for _ in tqdm(range(nr_runs), desc="Evaluating completion rate")])
+        cr_values, spl_values = cr_spl[:, 0], cr_spl[:, 1]
+        references = [generate_reference_trajectory(json_path, start=traj[0], end=goal, log=False)
+                      for traj, goal in zip(trajectory, goals)]
+        dtw_values = np.array([dynamic_time_warping(traj, ref) for traj, ref in zip(trajectory, references)])
+        ndtw_values = np.array([normalized_dynamic_time_warping(traj, ref, success_radius)
+                                for traj, ref in zip(trajectory, references)])
+        npl_values = np.array([normalized_path_length(traj, ref) for traj, ref in zip(trajectory, references)])
 
     storage_path = Path(storage_path)
     storage_path.mkdir(parents=True, exist_ok=True)
     np.save(storage_path / "cr_values.npy", cr_values)
+    np.save(storage_path / "spl_values.npy", spl_values)
     np.save(storage_path / "dtw_values.npy", dtw_values)
+    np.save(storage_path / "ndtw_values.npy", ndtw_values)
     np.save(storage_path / "npl_values.npy", npl_values)
 
 # (file prefix, plot title, y-limits). CR is a percentage, see completion_rate_mlp
 MEAN_OF_MEANS_METRICS = [
-    ("cr",  "Completion rate (CR) [%]",     (0.0, 100.0)),
-    ("dtw", "Dynamic time warping (DTW)",   None),
-    ("npl", "Normalized path length (NPL)", None),
+    ("cr",   "Completion rate (CR) [%]",               (0.0, 100.0)),
+    ("spl",  "Success weighted by path length (SPL)",  (0.0, 1.0)),
+    ("dtw",  "Dynamic time warping (DTW)",             None),
+    ("ndtw", "Normalized DTW (nDTW)",                  (0.0, 1.0)),
+    ("npl",  "Normalized path length (NPL)",           None),
 ]
+# Seeds saved before SPL/nDTW existed only have these, the others load as empty arrays
+REQUIRED_METRICS = ("cr", "dtw", "npl")
 
 def load_seed_metrics(metric_dir):
     """
-    Return {seed: {"cr": values, "dtw": values, "npl": values}} for every seed_<s> folder
-    in metric_dir holding all three arrays. Seeds whose job died before saving are skipped.
+    Return {seed: {"cr": values, "spl": values, ...}} for every seed_<s> folder in metric_dir
+    holding the REQUIRED_METRICS arrays. Seeds whose job died before saving are skipped;
+    optional metrics a seed lacks load as empty arrays.
     """
     per_seed = {}
     seed_dirs = sorted(Path(metric_dir).glob("seed_*"), key=lambda p: int(p.name.split("_")[-1]))
     for seed_dir in seed_dirs:
         paths = {key: seed_dir / f"{key}_values.npy" for key, _, _ in MEAN_OF_MEANS_METRICS}
-        if not all(path.is_file() for path in paths.values()):
+        if not all(paths[key].is_file() for key in REQUIRED_METRICS):
             warnings.warn(f"Incomplete metrics in {seed_dir}, skipping it")
             continue
-        per_seed[int(seed_dir.name.split("_")[-1])] = {key: np.load(path) for key, path in paths.items()}
+        per_seed[int(seed_dir.name.split("_")[-1])] = {
+            key: np.load(path) if path.is_file() else np.array([]) for key, path in paths.items()}
     return per_seed
+
+# W&B key of each metric file prefix, logged under "Metrics/" on the run of its seed
+WANDB_METRIC_NAMES = {"cr": "Completion Rate", "spl": "SPL", "dtw": "DTW", "ndtw": "nDTW", "npl": "NPL"}
+
+def seed_metric_summary(seed_dir):
+    """
+    One seed folder's final results as W&B keys: the budget-padded AUC, the best and last eval
+    success rate of the learning curve, and the mean of every metric array.
+    Metrics without values (DTW/nDTW/NPL when no trajectory reached the goal) are left out
+    rather than logged as 0, which would read as a perfect DTW.
+    """
+    seed_dir = Path(seed_dir)
+    summary = {}
+    if (seed_dir / "auc.npy").is_file():
+        summary["Metrics/AUC"] = float(np.load(seed_dir / "auc.npy")[0])
+    if (seed_dir / "success_curve.npy").is_file():
+        curve = np.load(seed_dir / "success_curve.npy")
+        if len(curve) > 0:
+            summary["Metrics/Best Eval Success Rate"] = float(curve.max())
+            summary["Metrics/Final Eval Success Rate"] = float(curve[-1])
+    for key, _, _ in MEAN_OF_MEANS_METRICS:
+        path = seed_dir / f"{key}_values.npy"
+        values = np.load(path) if path.is_file() else np.array([])
+        if len(values) > 0:
+            summary[f"Metrics/{WANDB_METRIC_NAMES[key]}"] = float(values.mean())
+    return summary
 
 def _gaussian_column(ax, x, mu, width, color, max_halfwidth=0.4):
     """Draw a vertical Gaussian N(mu, width^2) centred at x-position `x`."""
@@ -333,7 +424,7 @@ def plot_mean_of_means(metric_dir, title="", spread="sem", show_runs=True):
     seed_colors = dict(zip(seeds, plt.cm.tab10(np.arange(n_seeds) % 10)))  # same colour per seed in every panel
     rng = np.random.default_rng(0)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8))
+    fig, axes = plt.subplots(1, len(MEAN_OF_MEANS_METRICS), figsize=(5 * len(MEAN_OF_MEANS_METRICS), 4.8))
     summary = {"seeds": seeds}
 
     for ax, (key, name, bounds) in zip(axes, MEAN_OF_MEANS_METRICS):

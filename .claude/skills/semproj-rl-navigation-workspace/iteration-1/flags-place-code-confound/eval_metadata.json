@@ -1,0 +1,10 @@
+{
+  "eval_name": "flags-place-code-confound",
+  "prompt": "I trained MLP and LSTM on rooms/two_room.json and rooms/C_maze.json with the default env config, 5 seeds each. MLP gets ~98% success and higher AUC everywhere, LSTM is slower and worse. Can I conclude in the paper that memory doesn't help for indoor navigation? Write me a short answer I can paste to my supervisor.",
+  "assertions": [
+    "The answer identifies the global Perlin wall colour as a position (place) code that lets a memoryless policy localise itself.",
+    "The answer points out that a fixed goal per room makes the task reactive, so memory is not needed.",
+    "The answer recommends at least one concrete control experiment (colour off or room-local, randomised goals, or the twin-room cue task) before making the claim.",
+    "The answer does not endorse the unconditional claim that memory doesn't help for indoor navigation."
+  ]
+}

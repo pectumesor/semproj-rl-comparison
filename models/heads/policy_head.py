@@ -2,7 +2,7 @@ from ..network_utils import build_mlp
 from typing import Sequence
 import torch
 import torch.nn as nn
-from torch.distributions import Normal
+from torch.distributions import Normal, Categorical
 
 LOG_STD_MIN = -5
 LOG_STD_MAX = 1.0
@@ -64,9 +64,73 @@ class GuassianPolicyHead(nn.Module):
     def act_inference(self, backbone_feats: torch.Tensor) -> torch.Tensor:
 
         """
-            Test the policy by taking the mean action: a ~ \pi(. | s)  
+            Test the policy by taking the mean action: a ~ \pi(. | s)
         """
         return self.mu(backbone_feats)
+
+    def to_env_action(self, action: torch.Tensor) -> torch.Tensor:
+        """The sampled action already is the env's continuous (turning, speed) action"""
+        return action
+
+
+class CategoricalPolicyHead(nn.Module):
+
+    """
+    Policy Head used for PPO Actor with a discrete action space.
+
+    The policy picks an index into action_table, a fixed list of (turning, speed) pairs, and the
+    env still receives the continuous action of that entry (to_env_action). To fit the
+    continuous rollout buffers, actions are stored as (B, act_dim) with the index in column 0,
+    the mean/std are those of the continuous action under the categorical distribution
+    (logging only; the KL of a discrete policy is estimated from the log-prob ratio).
+    """
+
+    @property
+    def action_mean(self):
+        probs = self.distribution.probs                               # (B, N)
+        return probs @ self.action_table                              # (B, act_dim)
+
+    @property
+    def action_std(self):
+        probs = self.distribution.probs
+        second_moment = probs @ self.action_table.pow(2)
+        return (second_moment - self.action_mean.pow(2)).clamp_min(0.0).sqrt()
+
+    @property
+    def entropy(self):
+        return self.distribution.entropy()
+
+    def __init__(self, backbone_dim: int, action_table, hidden_sizes: Sequence[int]):
+        super().__init__()
+
+        self.register_buffer("action_table", torch.as_tensor(action_table, dtype=torch.float32), persistent=False)
+        self.logits = build_mlp(backbone_dim, hidden_sizes, self.action_table.shape[0])
+        self.distribution = None
+
+    def forward(self):
+        pass
+
+    def update_distribution(self, backbone_feats: torch.Tensor):
+        self.distribution = Categorical(logits=self.logits(backbone_feats))
+
+    def _store_index(self, index: torch.Tensor) -> torch.Tensor:
+        action = torch.zeros(*index.shape, self.action_table.shape[1], device=index.device)
+        action[..., 0] = index.float()
+        return action
+
+    def act(self, backbone_feats: torch.Tensor) -> torch.Tensor:
+        self.update_distribution(backbone_feats)
+        return self._store_index(self.distribution.sample())
+
+    def log_prob_action(self, actions: torch.Tensor):
+        return self.distribution.log_prob(actions[..., 0].long())
+
+    def act_inference(self, backbone_feats: torch.Tensor) -> torch.Tensor:
+        """Greedy action, already mapped to the env's continuous action"""
+        return self.action_table[self.logits(backbone_feats).argmax(dim=-1)]
+
+    def to_env_action(self, action: torch.Tensor) -> torch.Tensor:
+        return self.action_table[action[..., 0].long()]
 
 
 class SquashedGaussianPolicyHead(nn.Module):

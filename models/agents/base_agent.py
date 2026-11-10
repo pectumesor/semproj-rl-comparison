@@ -8,17 +8,30 @@ class BaseAgent(nn.Module):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: nn.Module,
                  actor: GuassianPolicyHead | SquashedGaussianPolicyHead, 
-                 critic: DoubleQNet | ValueNet):
+                 critic: DoubleQNet | ValueNet, masked_channels=()):
         super().__init__()
         self.obs_embed_model = obs_embed_model
         self.backbone_model = backbone_model
         self.actor = actor
         self.critic = critic
+        # Ray channels zeroed before the observation embedding (e.g. [3] hides the distances the depth aux head predicts)
+        self.masked_channels = list(masked_channels)
 
+
+    def mask_rays(self, rays: torch.Tensor) -> torch.Tensor:
+        # Channels sit on dim -2 for plain (B, C, R) and frame-stacked (B, F, C, R) rays alike
+        if not self.masked_channels:
+            return rays
+        rays = rays.clone()
+        rays[..., self.masked_channels, :] = 0.0
+        return rays
+
+    def embed_obs(self, obs: dict) -> torch.Tensor:
+        return self.obs_embed_model(self.mask_rays(obs['rays']), obs['proprio'])
 
     def forward(self, obs):
         
-        obs_feat = self.obs_embed_model(obs['rays'], obs['proprio'])
+        obs_feat = self.embed_obs(obs)
         h = self.backbone_model(obs_feat)
         return h
     

@@ -1,0 +1,10 @@
+{
+  "eval_name": "declines-full-local-training",
+  "prompt": "can you just run the E2 pilot here on my laptop (L=32, LSTM) and tell me if it beats chance? i dont want to wait for the euler queue",
+  "assertions": [
+    "No full-budget training (default n_iterations with 256 envs) is launched locally; any local run has an explicitly small iteration count.",
+    "The response explains why a full run is impractical locally, with a rough size (iterations \u00d7 envs \u00d7 steps, or hours of CPU time).",
+    "The response gives a concrete command or script invocation to run the L=32 LSTM pilot on Euler, with a max_steps suited to the twin room.",
+    "The response does not claim that the agent beats (or fails to beat) chance based on a tiny local run."
+  ]
+}

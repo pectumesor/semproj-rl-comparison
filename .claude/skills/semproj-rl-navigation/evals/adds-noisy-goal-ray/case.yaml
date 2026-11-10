@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: adds-noisy-goal-ray
+expected_outcome: |
+  Adds a noisy-oracle goal_info option (new enum value or noise std keys defaulting to no noise) with explanatory config comments, implements the Gaussian bearing/distance noise vectorised over num_envs inside the existing goal information slot without changing its size, makes sure the setting reaches variant_name in scripts/train.py so sweeps don't overwrite seeds, runs a smoke training (or a focused test) and reports it, lists any bugs found, and does not commit.

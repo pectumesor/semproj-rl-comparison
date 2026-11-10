@@ -113,7 +113,7 @@ class TrajGenEnv(gym.Env):
 
         self.agent_pos        = rand_pos
         self.facing_direction = torch.empty((self.num_envs,), device=self.device).uniform_(0, 2 * torch.pi)
-        _, distances, _ = self.ray_cast.scan(self.agent_pos, self.facing_direction)
+        _, distances, _, _ = self.ray_cast.scan(self.agent_pos, self.facing_direction)
         return self.get_observations(distances), {}
 
     def step(self, action: torch.Tensor):
@@ -135,7 +135,7 @@ class TrajGenEnv(gym.Env):
         self.agent_pos        += delta * safe_t[:, None]
         self.facing_direction += turning
 
-        _, distances, _ = self.ray_cast.scan(self.agent_pos, self.facing_direction)
+        _, distances, _, _ = self.ray_cast.scan(self.agent_pos, self.facing_direction)
         obs = self.get_observations(distances)
 
         return obs, {

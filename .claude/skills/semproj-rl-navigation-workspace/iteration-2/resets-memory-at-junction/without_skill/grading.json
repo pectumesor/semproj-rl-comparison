@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "The reset is an evaluation-only option that is off by default, and training/rollout collection is unchanged.",
+      "passed": true,
+      "evidence": "junction_reset_rollouts is evaluation-only; reset_at_junction flag; training untouched."
+    },
+    {
+      "text": "Only the envs that just entered the junction get their recurrent state zeroed (a per-env mask), and each env is reset once per episode, not every step it spends in the junction.",
+      "passed": true,
+      "evidence": "done = done | entered, once per episode; the test checks the flag rises exactly once."
+    },
+    {
+      "text": "The junction region is derived from the room JSON or twin-room generator geometry so it works for every L, not hard-coded coordinates for a single room.",
+      "passed": true,
+      "evidence": "junction_region added to the generator and all twin_rooms_L*.json; read by junction_region_json()."
+    },
+    {
+      "text": "The new path is actually run (test or smoke evaluation) for both an LSTM and a GRU agent.",
+      "passed": true,
+      "evidence": "Tests test_reset_at_junction_zeroes_state_once[lstm|gru]; script run end to end on untrained LSTM and GRU checkpoints."
+    },
+    {
+      "text": "No git commit or push is made.",
+      "passed": true,
+      "evidence": "Only the harness snapshot commit in git log."
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

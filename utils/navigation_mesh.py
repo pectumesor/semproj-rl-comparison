@@ -3,6 +3,7 @@ Script with functions that triangulate the rooms to create a navigation mesh and
 
 """
 import json
+from functools import lru_cache
 import numpy as np
 import triangle as tr
 import networkx as nx
@@ -39,11 +40,15 @@ def point_in_triangle(p, a, b, c):
 
 def assign_triangle(p, triangles):
     """
-    Find inside which delaunay triangle some point is
+    Find inside which delaunay triangle some point is.
+    A point outside the triangulation (e.g. a few units past a wall due to the movement
+    clamp) falls back to the triangle with the closest centroid instead of returning None.
     """
     for i, t in enumerate(triangles):
         if point_in_triangle(p, *t):
             return i
+    centroids = np.array([np.mean(t, axis=0) for t in triangles])
+    return int(np.argmin(np.linalg.norm(centroids - np.asarray(p, dtype=np.float64), axis=1)))
 
 def extract_vertices_and_segments(json_path: str):
     vertex_index = {}
@@ -279,13 +284,25 @@ def funnel_algorithm(centroid_path, triangle_path, triangulation, start, end):
 
    return string_pull(portals_left, portals_right)
 
-def generate_reference_trajectory(json_path: str):
-
+@lru_cache(maxsize=None)
+def navigation_mesh(json_path: str):
+    """Triangulation and triangle graph of a room, built once per room: every start/goal pair reuses them."""
     room, start, end = extract_vertices_and_segments(json_path)
 
     t = tr.triangulate(room, 'pn')
 
     _, T = generate_graphs(t)
+
+    return room, t, T, start, end
+
+def generate_reference_trajectory(json_path: str, start=None, end=None, log: bool = True):
+    """
+    Shortest (funnel) path from start to end through the room's navigation mesh.
+    start/end default to the room JSON's start_pos/goal_pos.
+    """
+    room, t, T, json_start, json_end = navigation_mesh(json_path)
+    start = json_start if start is None else [float(start[0]), float(start[1])]
+    end = json_end if end is None else [float(end[0]), float(end[1])]
 
     path = shortest_triangle_path(T, t["vertices"], t["triangles"], start, end)
 
@@ -293,7 +310,8 @@ def generate_reference_trajectory(json_path: str):
 
     funnel_path = np.array(funnel_algorithm(centroid_path, path, t, start, end))
 
-    log_room_and_path(t, room, path, funnel_path, start, end)
+    if log:
+        log_room_and_path(t, room, path, funnel_path, start, end)
 
     return funnel_path
 
@@ -309,9 +327,10 @@ def log_room_and_path(triangulation, room,
     ax.plot(*start, marker="s", color="green", markersize=8, zorder=8)
     ax.plot(*end, marker="*", color="red", markersize=12, zorder=8)
     ax.legend()
-    wandb.log({
-            "Room": wandb.Image(plt.gcf())
-        })
+    if wandb.run is not None:
+        wandb.log({
+                "Room": wandb.Image(plt.gcf())
+            })
     plt.close("all")
 
 def test_triangulation(json_path: str):

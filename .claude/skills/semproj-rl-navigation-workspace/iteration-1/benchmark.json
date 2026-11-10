@@ -1,0 +1,325 @@
+{
+  "metadata": {
+    "skill_name": "semproj-rl-navigation",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-10-29T13:15:06Z",
+    "evals_run": [
+      "adds-noisy-goal-ray",
+      "flags-place-code-confound",
+      "writes-gru-trigger-sweep"
+    ],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {
+      "eval_id": "adds-noisy-goal-ray",
+      "eval_name": "adds-noisy-goal-ray",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 228.1,
+        "tokens": 105511,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "A noisy oracle goal condition is added to the config (a new goal_info value and/or noise std keys) with a comment, and the default behaviour of existing goal_info values is unchanged.",
+          "passed": true,
+          "evidence": "New goal_info value noisy_oracle plus an information.goal_noise block (distance_noise 20.0, bearing_noise_deg 15.0) with comments; the default goal_info stays none."
+        },
+        {
+          "text": "The noise is applied in a vectorised way over all envs (no Python loop over envs) and the goal information slot keeps its 5-dim size.",
+          "passed": true,
+          "evidence": "goal_features draws torch.randn(num_envs, 2) and fills the same 5-dim slot; no loop over envs."
+        },
+        {
+          "text": "The new setting (the condition and its noise std) ends up in variant_name in scripts/train.py or is otherwise guaranteed to be part of the storage name.",
+          "passed": true,
+          "evidence": "variant_name appends the stds when goal_info == noisy_oracle; also adds a W&B tag."
+        },
+        {
+          "text": "The run executes a smoke training run or a focused test that exercises the new condition, and reports the result.",
+          "passed": true,
+          "evidence": "15 tests pass, plus smoke runs for MLP, LSTM and GRU with noisy_oracle."
+        },
+        {
+          "text": "No git commit or push is made.",
+          "passed": true,
+          "evidence": "git log has only harness commits; changes are uncommitted."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "flags-place-code-confound",
+      "eval_name": "flags-place-code-confound",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 57.7,
+        "tokens": 71027,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The answer identifies the global Perlin wall colour as a position (place) code that lets a memoryless policy localise itself.",
+          "passed": true,
+          "evidence": "Names colour_mode: global as a place code: 'Ray channels 4\u20136 are a Perlin colour sampled at the hit point's world (x, y)'."
+        },
+        {
+          "text": "The answer points out that a fixed goal per room makes the task reactive, so memory is not needed.",
+          "passed": true,
+          "evidence": "Names goal_mode: fixed and gives the goal coordinates for both rooms; calls the policy a reactive position\u2192action lookup."
+        },
+        {
+          "text": "The answer recommends at least one concrete control experiment (colour off or room-local, randomised goals, or the twin-room cue task) before making the claim.",
+          "passed": true,
+          "evidence": "Recommends scripts/e1_place_code_audit.sh (colour off, random goals) and the E2 twin-room experiment."
+        },
+        {
+          "text": "The answer does not endorse the unconditional claim that memory doesn't help for indoor navigation.",
+          "passed": true,
+          "evidence": "Opens with 'Short answer: no' and offers only the conditional claim."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "writes-gru-trigger-sweep",
+      "eval_name": "writes-gru-trigger-sweep",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 121.6,
+        "tokens": 78976,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "A new .sh file exists under scripts/ with the conda/Euler setup header, a join() helper, a single NOW timestamp and a final scripts/evaluate_metrics.py call.",
+          "passed": true,
+          "evidence": "scripts/e1_gru_trigger.sh has the eth_proxy/conda header, join() on line 57, NOW on line 54 and evaluate_metrics.py on line 77."
+        },
+        {
+          "text": "The script trains backbone=gru_backbone on rooms/C_maze.json and rooms/medium_maze.json with env.colour_mode=off and env.goal_mode=random.",
+          "passed": true,
+          "evidence": "BACKBONE_NN=(gru_backbone); TRIGGERED_ROOMS are C_maze and medium_maze; env.colour_mode=off and env.goal_mode=random."
+        },
+        {
+          "text": "The script reuses E1's long-room settings (algorithm.max_steps=4096, env.gamma=0.999, env.goal_radius=16, a 720-minute timeout) and E1's seeds, so the GRU runs are comparable with the E1 LSTM and MLP runs.",
+          "passed": true,
+          "evidence": "GOAL_RADIUS=16, EPISODE_LENGTH=4096, GAMMA=0.999, timeout_min=720; SEEDS=(0 1 2 3 4), the same as E1."
+        },
+        {
+          "text": "The final reply says the GRU result is reported as a robustness check whatever the outcome, and not as the best of LSTM and GRU.",
+          "passed": true,
+          "evidence": "Header line 44 and the reply both say the result is reported whatever it is, never as 'best of LSTM and GRU'."
+        },
+        {
+          "text": "The run neither launches the sweep nor makes a git commit or push.",
+          "passed": true,
+          "evidence": "The reply says the script was not run; git log has only harness commits."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "adds-noisy-goal-ray",
+      "eval_name": "adds-noisy-goal-ray",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 240.8,
+        "tokens": 97707,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "A noisy oracle goal condition is added to the config (a new goal_info value and/or noise std keys) with a comment, and the default behaviour of existing goal_info values is unchanged.",
+          "passed": true,
+          "evidence": "New goal_info value noisy_oracle plus an information.goal_noise block (bearing 15\u00b0, relative distance 0.1) with comments; existing modes unchanged."
+        },
+        {
+          "text": "The noise is applied in a vectorised way over all envs (no Python loop over envs) and the goal information slot keeps its 5-dim size.",
+          "passed": true,
+          "evidence": "_noisy_offset uses torch.randn_like on (E,) tensors; the 5-dim slot is kept (proprio 135 with reserved slots)."
+        },
+        {
+          "text": "The new setting (the condition and its noise std) ends up in variant_name in scripts/train.py or is otherwise guaranteed to be part of the storage name.",
+          "passed": true,
+          "evidence": "variant_name appends -bearing-distance when goal_info == noisy_oracle."
+        },
+        {
+          "text": "The run executes a smoke training run or a focused test that exercises the new condition, and reports the result.",
+          "passed": true,
+          "evidence": "New test passes; after the harness fix, all 15 tests pass and MLP and LSTM smoke runs exit 0."
+        },
+        {
+          "text": "No git commit or push is made.",
+          "passed": true,
+          "evidence": "git log has only harness commits; changes are uncommitted."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "flags-place-code-confound",
+      "eval_name": "flags-place-code-confound",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 36.7,
+        "tokens": 59954,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The answer identifies the global Perlin wall colour as a position (place) code that lets a memoryless policy localise itself.",
+          "passed": true,
+          "evidence": "Names colour_mode: global as a place code: 'every observation carries a place code'."
+        },
+        {
+          "text": "The answer points out that a fixed goal per room makes the task reactive, so memory is not needed.",
+          "passed": true,
+          "evidence": "Names goal_mode: fixed (two_room goal at (20, 20)); says nothing needs remembering."
+        },
+        {
+          "text": "The answer recommends at least one concrete control experiment (colour off or room-local, randomised goals, or the twin-room cue task) before making the claim.",
+          "passed": true,
+          "evidence": "Recommends the E1 audit, E1a/E1b and the E2 twin rooms."
+        },
+        {
+          "text": "The answer does not endorse the unconditional claim that memory doesn't help for indoor navigation.",
+          "passed": true,
+          "evidence": "Opens with 'Short answer: no'; reframes the claim as about these environments."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "writes-gru-trigger-sweep",
+      "eval_name": "writes-gru-trigger-sweep",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 97.3,
+        "tokens": 79147,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "A new .sh file exists under scripts/ with the conda/Euler setup header, a join() helper, a single NOW timestamp and a final scripts/evaluate_metrics.py call.",
+          "passed": true,
+          "evidence": "scripts/e1_gru_trigger.sh has the eth_proxy/conda header, join() on line 69, NOW on line 59 (optional E1 timestamp argument) and evaluate_metrics.py on line 89."
+        },
+        {
+          "text": "The script trains backbone=gru_backbone on rooms/C_maze.json and rooms/medium_maze.json with env.colour_mode=off and env.goal_mode=random.",
+          "passed": true,
+          "evidence": "BACKBONE_NN=(gru_backbone); rooms are C_maze and medium_maze; COLOUR_MODE=off and GOAL_MODE=random."
+        },
+        {
+          "text": "The script reuses E1's long-room settings (algorithm.max_steps=4096, env.gamma=0.999, env.goal_radius=16, a 720-minute timeout) and E1's seeds, so the GRU runs are comparable with the E1 LSTM and MLP runs.",
+          "passed": true,
+          "evidence": "GOAL_RADIUS=16, GAMMA=0.999, EPISODE_LENGTH=4096, timeout_min=720; SEEDS=(0 1 2 3 4), the same as E1."
+        },
+        {
+          "text": "The final reply says the GRU result is reported as a robustness check whatever the outcome, and not as the best of LSTM and GRU.",
+          "passed": true,
+          "evidence": "Header line 44 and the reply say 'reported whatever it shows, never merged into best of LSTM and GRU'."
+        },
+        {
+          "text": "The run neither launches the sweep nor makes a git commit or push.",
+          "passed": true,
+          "evidence": "The reply says it hasn't run or submitted anything; git log has only harness commits."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 135.8,
+        "stddev": 86.0829,
+        "min": 57.7,
+        "max": 228.1
+      },
+      "tokens": {
+        "mean": 85171.3333,
+        "stddev": 18057.4965,
+        "min": 71027,
+        "max": 105511
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 124.9333,
+        "stddev": 104.8184,
+        "min": 36.7,
+        "max": 240.8
+      },
+      "tokens": {
+        "mean": 78936.0,
+        "stddev": 18877.3844,
+        "min": 59954,
+        "max": 97707
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.00",
+      "time_seconds": "+10.9",
+      "tokens": "+6235"
+    }
+  },
+  "notes": [
+    "Non-discriminating: every assertion passed with and without the skill. The repo already holds the plan doc (reports/), research notes, and config comments written during E0, so a baseline agent recovers most of the project context by reading files. The tests check things the repo itself documents.",
+    "Qualitative differences the assertions don't capture: with the skill, the place-code answer also flagged screening seeds (0-2) in reported results, the unpadded-AUC check and the missing LR pilot. The GRU run with the skill flagged that the plan puts E1 on seeds 0-4 while also banning screening seeds from results (a real inconsistency in the plan). The noisy-goal run with the skill updated the plan doc's E3 table and budget and reported two docstring fixes.",
+    "Cost: with the skill used about 13-20% more tokens and 1.3-1.6x the wall time, mostly from reading SKILL.md/references and running more smoke tests (MLP, LSTM and GRU vs MLP and LSTM).",
+    "Harness issue: the first repo copies left out the models/ package (rsync --exclude models). Both noisy-goal runs were told mid-run; the baseline got an extra resumed turn (its timing includes it). The GRU run with the skill could not smoke-test because of it.",
+    "Next tests should cover what the repo does NOT document: e.g. a new knob that must reach variant_name with no nearby example, a recurrent-only code path, or Euler gotchas (comma lists, +key overrides)."
+  ]
+}

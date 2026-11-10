@@ -1,0 +1,30 @@
+{
+  "expectations": [
+    {
+      "text": "The answer identifies the global Perlin wall colour as a position (place) code that lets a memoryless policy localise itself.",
+      "passed": true,
+      "evidence": "Names colour_mode: global as a place code: 'Ray channels 4\u20136 are a Perlin colour sampled at the hit point's world (x, y)'."
+    },
+    {
+      "text": "The answer points out that a fixed goal per room makes the task reactive, so memory is not needed.",
+      "passed": true,
+      "evidence": "Names goal_mode: fixed and gives the goal coordinates for both rooms; calls the policy a reactive position\u2192action lookup."
+    },
+    {
+      "text": "The answer recommends at least one concrete control experiment (colour off or room-local, randomised goals, or the twin-room cue task) before making the claim.",
+      "passed": true,
+      "evidence": "Recommends scripts/e1_place_code_audit.sh (colour off, random goals) and the E2 twin-room experiment."
+    },
+    {
+      "text": "The answer does not endorse the unconditional claim that memory doesn't help for indoor navigation.",
+      "passed": true,
+      "evidence": "Opens with 'Short answer: no' and offers only the conditional claim."
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 0,
+    "total": 4,
+    "pass_rate": 1.0
+  }
+}

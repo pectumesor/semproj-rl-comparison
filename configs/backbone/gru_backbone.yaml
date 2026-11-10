@@ -1,0 +1,7 @@
+name: gru
+backbone_hidden_sizes: [64, 64]
+# The recurrent keys keep their lstm_ names so the buffers, RecurrentPPO and rollouts
+# read the same fields for both recurrent backbones
+lstm_backbone_feature_dim: 64
+lstm_num_layers: 2
+bptt_window_size: 16

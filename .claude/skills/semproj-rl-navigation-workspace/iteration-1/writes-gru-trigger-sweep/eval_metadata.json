@@ -1,0 +1,11 @@
+{
+  "eval_name": "writes-gru-trigger-sweep",
+  "prompt": "E1 results are in: with colour off and random goals, LSTM is clearly below MLP on C_maze and medium_maze (CIs dont overlap). so the gru trigger rule kicks in. write me the euler sweep script for the GRU check on those rooms, same settings as that E1 condition. put it in scripts/, dont run it",
+  "assertions": [
+    "A new .sh file exists under scripts/ with the conda/Euler setup header, a join() helper, a single NOW timestamp and a final scripts/evaluate_metrics.py call.",
+    "The script trains backbone=gru_backbone on rooms/C_maze.json and rooms/medium_maze.json with env.colour_mode=off and env.goal_mode=random.",
+    "The script reuses E1's long-room settings (algorithm.max_steps=4096, env.gamma=0.999, env.goal_radius=16, a 720-minute timeout) and E1's seeds, so the GRU runs are comparable with the E1 LSTM and MLP runs.",
+    "The final reply says the GRU result is reported as a robustness check whatever the outcome, and not as the best of LSTM and GRU.",
+    "The run neither launches the sweep nor makes a git commit or push."
+  ]
+}

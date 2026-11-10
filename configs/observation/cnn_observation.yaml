@@ -6,3 +6,6 @@ defaults:
 name: cnn
 obs_embed_hidden_sizes: [64, 64]
 cnn_output_channels: 64
+# Ray channels zeroed before the embedding, e.g. [3] hides the distances (use it with the depth aux head,
+# which otherwise regresses an input channel). Aux labels still come from the unmasked rays
+masked_channels: []

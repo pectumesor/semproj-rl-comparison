@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: resets-memory-at-junction
+expected_outcome: |
+  Adds an evaluation-only option (default off, training untouched) that zeros the recurrent state for the envs that just entered the junction region of a twin room, with the junction located from the room geometry/JSON rather than hard-coded coordinates for one L. It works for both LSTM and GRU (shared tuple state), is exercised for both backbones, and can be run on a saved checkpoint. Nothing is committed; any bugs found are listed.

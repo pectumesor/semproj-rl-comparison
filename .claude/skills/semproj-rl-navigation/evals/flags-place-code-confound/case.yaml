@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: flags-place-code-confound
+expected_outcome: |
+  Says the conclusion is not supported yet, because the default env leaks position (global Perlin colour on walls acts as a place code) and the goal is fixed per room, so the task barely needs memory. Recommends the controlled checks from the plan (colour off/room-local with a fixed colour seed, randomised goals, the twin-room cue task) before claiming anything, and frames the result conditionally.

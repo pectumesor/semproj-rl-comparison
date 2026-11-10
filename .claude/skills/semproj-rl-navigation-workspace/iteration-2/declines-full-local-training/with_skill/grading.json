@@ -1,0 +1,30 @@
+{
+  "expectations": [
+    {
+      "text": "No full-budget training (default n_iterations with 256 envs) is launched locally; any local run has an explicitly small iteration count.",
+      "passed": true,
+      "evidence": "Ran only a smoke test plus a 3-iteration timing probe; asked before any full run."
+    },
+    {
+      "text": "The response explains why a full run is impractical locally, with a rough size (iterations \u00d7 envs \u00d7 steps, or hours of CPU time).",
+      "passed": true,
+      "evidence": "About 2.9 s/iteration \u2192 50\u201360 min per seed for 1000 iterations; early stopping won't trigger near 0.5."
+    },
+    {
+      "text": "The response gives a concrete command or script invocation to run the L=32 LSTM pilot on Euler, with a max_steps suited to the twin room.",
+      "passed": false,
+      "evidence": "Describes an Euler-only pilot (LSTM, L=32, seeds 0\u20132) and offers to write scripts/e2_pilot.sh, but the only concrete command is a local hydra/launcher=basic one; no Euler command is given."
+    },
+    {
+      "text": "The response does not claim that the agent beats (or fails to beat) chance based on a tiny local run.",
+      "passed": true,
+      "evidence": "Says iteration-3 success of 0.00 is meaningless; 'beats chance' only makes sense late in training."
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 1,
+    "total": 4,
+    "pass_rate": 0.75
+  }
+}

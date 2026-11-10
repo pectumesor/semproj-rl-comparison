@@ -13,8 +13,11 @@ from tqdm import tqdm
 import torch.nn.functional as F
 
 from models.agents import PPOAgent, RecurrentPPOAgent
+from models.heads import CategoricalPolicyHead
 from .early_stopping import ConvergenceMonitor
-from envs import LoopLabeler
+
+# np.trapezoid only exists from numpy 2.0 on, environment.yaml pins numpy<2.0 (np.trapz)
+trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
 @dataclass
 class PPOUpdateStats:
@@ -30,6 +33,7 @@ class PPOUpdateStats:
     explained_variance: float = 0
     max_kl: float = 0
     kl_break: bool = False
+    num_updates: int = 0
     
 
 class PPO(ABC):
@@ -111,6 +115,17 @@ class MLPPPO(PPO):
 
 
         self.optimizer = optim.Adam(params=self.agent.parameters(), lr=self.learning_rate)
+
+        # Discrete policies have no Gaussian (mu, std), their KL is estimated from the log-prob ratio
+        self.discrete = isinstance(self.agent.actor, CategoricalPolicyHead)
+
+        # Learning curve and AUC of the last train() call, saved by train.py next to the metrics
+        self.eval_success_curve = []
+        if wandb.run is not None:
+            # Runs stop at different steps, so the curves share their own axis (see log_eval_auc for the padding)
+            wandb.run.define_metric("Iteration")
+            wandb.run.define_metric("Curves/*", step_metric="Iteration")
+        self.auc = None
 
 
     def collect_rollout(self, obs: dict, done: torch.Tensor):
@@ -235,6 +250,13 @@ class MLPPPO(PPO):
             depth_loss = F.mse_loss(dist_pred, dist_labels)
             return depth_loss
 
+    def compute_kl(self, old_mu_batch, old_std_batch, mu_batch, std_batch, logp_batch, old_logp_batch):
+        if self.discrete:
+            # k3 estimator of KL(old||new) (Schulman, "Approximating KL Divergence"): unbiased, always >= 0
+            log_ratio = logp_batch - old_logp_batch
+            return ((torch.exp(log_ratio) - 1) - log_ratio).mean()
+        return self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
+
     def compute_kl_mean(self, old_mu_batch, old_std_batch, mu_batch, std_batch):
 
         kl_per_dim = (
@@ -299,7 +321,7 @@ class MLPPPO(PPO):
             logp_batch, mu_batch, std_batch, entropy_batch, val_batch = self.evaluate_actions(obs_batch, act_batch)
 
             ratio = torch.exp(logp_batch - old_logp_batch)
-            kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
+            kl = self.compute_kl(old_mu_batch, old_std_batch, mu_batch, std_batch, logp_batch, old_logp_batch)
             kl_val = kl.item()
             max_kl = max(max_kl, kl_val)
 
@@ -343,6 +365,7 @@ class MLPPPO(PPO):
             mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1
 
+        completed_updates = num_updates
         num_updates = max(num_updates, 1)
         mean_kl /= num_updates
         mean_surrogate_loss /= num_updates
@@ -365,6 +388,7 @@ class MLPPPO(PPO):
             explained_variance=explained_variance,
             max_kl=max_kl,
             kl_break=kl_break,
+            num_updates=completed_updates,
         )
 
     def evaluate_policy(self):
@@ -386,34 +410,68 @@ class MLPPPO(PPO):
 
             while active.any():
                 action = self.agent.predict_action(obs)
-                obs, reward, terminated, truncated, _ = self.eval_env.step(action)
+                obs, reward, terminated, truncated, info = self.eval_env.step(action)
 
                 returns += reward * active
                 lengths += active
-                success |= terminated & active  # terminated == reached the goal
+                success |= info["success"] & active  # terminated also covers failures (wrong goal region)
                 active &= ~(terminated | truncated)
 
         self.agent.train()
         return returns.mean().item(), lengths.float().mean().item(), success.float().mean().item()
 
+    def budget_eval_steps(self):
+        """Number of evaluations a run that never stops early does: every eval_interval plus the last iteration."""
+        return self.n_iterations // self.eval_interval + int(self.n_iterations % self.eval_interval != 0)
+
+    def eval_curve_data(self, iteration, eval_success_rate):
+        """W&B keys of one point of the Curves/* panels."""
+        return {
+            "Iteration": iteration,
+            "Curves/Eval Success Rate": eval_success_rate,
+            "Curves/Best Eval Success Rate EMA": self.early_stopper.best,
+        }
+
     def log_eval_auc(self, eval_steps, mean_eval_success_rates):
         """
         Logs the normalized area under the mean_eval_success_rate curve (x-axis in env eval steps),
-        i.e. the average evaluation success rate divided by how often we evaluated the policy during training
+        i.e. the average evaluation success rate over the full training budget.
 
+        A run that stops early is padded with its last success rate up to the evaluations it would have
+        done without early stopping. Otherwise every run is scored over its own horizon, and a fast learner
+        that stops early could tie with (or lose to) a slow one that crawls up to the threshold.
         """
-        if wandb.run is None or len(mean_eval_success_rates) == 0:
+        if len(mean_eval_success_rates) == 0:
             return
 
+        budget = max(self.budget_eval_steps(), eval_steps)
+        curve = list(mean_eval_success_rates) + [mean_eval_success_rates[-1]] * (budget - eval_steps)
+
         # Unit spacing between evaluations: n points span n - 1, so this is the mean height in [0, 1]
-        auc = (np.trapezoid(mean_eval_success_rates) / (eval_steps - 1) if eval_steps > 1
-               else mean_eval_success_rates[0])
+        auc = (trapezoid(curve) / (budget - 1) if budget > 1
+               else curve[0])
+        self.eval_success_curve = np.asarray(mean_eval_success_rates, dtype=np.float32)
+        self.auc = float(auc)
+
+        if wandb.run is None:
+            return
         wandb.run.define_metric("auc/*", step_metric="auc/seed")
         wandb.log({
             "auc/seed": self.seed,
             "auc/eval_return_auc": auc,
             "auc/iterations": eval_steps,
         })
+
+        # Hold the last values up to the budget, the same padding as the AUC: every run then spans the same
+        # x-axis and W&B can average a group. The raw "Eval Success Rate" panel keeps the real stopping points
+        for evaluation in range(eval_steps, budget):
+            wandb.log(self.eval_curve_data(min((evaluation + 1) * self.eval_interval, self.n_iterations),
+                                           mean_eval_success_rates[-1]))
+
+        # One value per run: in the summary (runs table), logged it would be a single dot at the run's last step
+        wandb.run.summary["Best Eval Success Rate EMA"] = self.early_stopper.best
+        if eval_steps < budget:
+            wandb.run.summary["Early stopping"] = eval_steps * self.eval_interval
 
     def train(self, run_dir = None):
 
@@ -470,6 +528,7 @@ class MLPPPO(PPO):
                     f"Mean KL-Divergence": stats.mean_kl,
                     f"Max KL-Divergence": stats.max_kl,
                     f"KL Break": int(stats.kl_break),
+                    f"Updates": stats.num_updates,
                     f"Mean Surrogate Loss": stats.mean_surrogate_loss,
                     f"Mean Value Loss": stats.mean_value_loss,
                     f"Mean Entropy": stats.mean_entropy,
@@ -488,6 +547,7 @@ class MLPPPO(PPO):
                     log_data[f"Mean Eval Return"] = mean_eval_return
                     log_data[f"Mean Eval Length"] = mean_eval_length
                     log_data[f"Eval Success Rate"] = mean_eval_success_rate
+                    log_data.update(self.eval_curve_data(iteration, mean_eval_success_rate))
                 wandb.log(log_data)
 
             if run_dir is not None:
@@ -504,12 +564,6 @@ class MLPPPO(PPO):
                     f"eval success rate plateaued (best EMA={self.early_stopper.best:.4f})"
                 )
                 print(msg)
-                if wandb.run is not None:
-                    wandb.log({
-                        f"Early stopping": iteration,
-                        f"Best Eval Success Rate EMA": self.early_stopper.best,
-                    })
-                
                 break
 
         self.log_eval_auc(eval_steps, mean_eval_success_rates)
@@ -521,6 +575,7 @@ class RecurrentPPO(MLPPPO):
 
         self.loop_labeler = None
         if cfg.head.auxiliary_head.enabled:
+            from envs import LoopLabeler  # deferred: envs -> utils.geometry -> utils -> algorithms is circular at module scope
             self.depth_coeff = cfg.head.auxiliary_head.depth_coeff
             self.loop_closure_coeff = cfg.head.auxiliary_head.loop_closure_coeff
             # unwrapped: agent_pos / max_steps live on the base NavigationEnv, not on the FrameStackWrapper
@@ -712,7 +767,7 @@ class RecurrentPPO(MLPPPO):
             if num_updates == 0 and abs(ratio.mean().item() - 1.0) > 0.05:
                 print(f"[RecurrentPPO] first-minibatch ratio={ratio.mean().item():.4f} (expected ~1.0), BPTT replay is inconsistent with collection")
 
-            kl = self.compute_kl_mean(old_mu_batch, old_std_batch, mu_batch, std_batch)
+            kl = self.compute_kl(old_mu_batch, old_std_batch, mu_batch, std_batch, logp_batch, old_logp_batch)
             kl_val = kl.item()
             max_kl = max(max_kl, kl_val)
 
@@ -755,6 +810,7 @@ class RecurrentPPO(MLPPPO):
             mean_clip_fraction += ((ratio - 1).abs() > self.clip_esilon).float().mean().item()
             num_updates += 1
 
+        completed_updates = num_updates
         num_updates = max(num_updates, 1)
         mean_kl /= num_updates
         mean_surrogate_loss /= num_updates
@@ -778,7 +834,8 @@ class RecurrentPPO(MLPPPO):
             clip_fraction=mean_clip_fraction,
             explained_variance=explained_variance,
             max_kl=max_kl,
-            kl_break=kl_break)
+            kl_break=kl_break,
+            num_updates=completed_updates)
     
     def evaluate_policy(self):
         if self.eval_env is None:
@@ -809,7 +866,7 @@ class RecurrentPPO(MLPPPO):
 
                 returns += reward * active
                 lengths += active
-                success |= terminated & active  # terminated == reached the goal
+                success |= info["success"] & active  # terminated also covers failures (wrong goal region)
                 active &= ~done
 
         self.agent.train()
@@ -884,6 +941,7 @@ class RecurrentPPO(MLPPPO):
                     f"Mean KL-Divergence": stats.mean_kl,
                     f"Max KL-Divergence": stats.max_kl,
                     f"KL Break": int(stats.kl_break),
+                    f"Updates": stats.num_updates,
                     f"Mean Surrogate Loss": stats.mean_surrogate_loss,
                     f"Mean Value Loss": stats.mean_value_loss,
                     f"Mean Entropy": stats.mean_entropy,
@@ -902,6 +960,7 @@ class RecurrentPPO(MLPPPO):
                     log_data[f"Mean Eval Return"] = mean_eval_return
                     log_data[f"Mean Eval Length"] = mean_eval_length
                     log_data[f"Eval Success Rate"] = eval_success_rate
+                    log_data.update(self.eval_curve_data(iteration, eval_success_rate))
                 wandb.log(log_data)
 
             if run_dir is not None:
@@ -918,11 +977,6 @@ class RecurrentPPO(MLPPPO):
                     f"eval success rate plateaued (best EMA={self.early_stopper.best:.4f})"
                 )
                 print(msg)
-                if wandb.run is not None:
-                    wandb.log({
-                        f"Early stopping": iteration,
-                        f"Best Eval Success Rate EMA": self.early_stopper.best,
-                    })
                 break
 
         self.log_eval_auc(eval_steps, eval_success_rates)

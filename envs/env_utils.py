@@ -39,7 +39,7 @@ class RayCast:
         self._ray_offsets = self._ray_offsets.to(device)
         return self
 
-    def intersect(self, positions: torch.Tensor, d: torch.Tensor):
+    def intersect(self, positions: torch.Tensor, d: torch.Tensor, return_index: bool = False):
         """
         Shared ray-wall intersection kernel.
 
@@ -47,7 +47,8 @@ class RayCast:
         d:         (E, R, 2)  ray vectors (not necessarily unit; length = max travel)
 
         Returns:
-            min_t:  (E, R)  in [0,1] fraction of |d| to closest wall; inf = no hit
+            min_t:    (E, R)  in [0,1] fraction of |d| to closest wall; inf = no hit
+            wall_idx: (E, R)  index of the closest wall, -1 = no hit (only if return_index)
         """
         r = self._r                                              # (W, 2)
         e = self.wall_starts[None, :, :] - positions[:, None, :]  # (E, W, 2)
@@ -66,7 +67,10 @@ class RayCast:
 
         hit    = (t >= 0) & (t <= 1.0) & (s >= 0) & (s <= 1.0)
         t_hits = torch.where(hit, t, torch.full_like(t, float('inf')))
-        min_t, _ = t_hits.min(dim=-1)  # (E, R)
+        min_t, wall_idx = t_hits.min(dim=-1)  # (E, R)
+        if return_index:
+            # Which wall was hit, so walls can carry their own colour (per_wall mode and cue walls)
+            return min_t, wall_idx.masked_fill(torch.isinf(min_t), -1)
         return min_t
 
     def scan(self, positions: torch.Tensor, facing_directions: torch.Tensor):
@@ -77,18 +81,19 @@ class RayCast:
             intersections: (E, R, 2)   — global hit position; ray endpoint at max_range for misses
             distances:     (E, R)      — inf when no wall hit
             d_unit:        (E, R, 2)   — unit ray directions (reuse in get_observations)
+            wall_idx:      (E, R)      — index of the hit wall, -1 when no wall hit
         """
         angles = facing_directions[:, None] + self._ray_offsets[None, :]        # (E, R)
         d_unit = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)    # (E, R, 2)
         d      = d_unit * self.max_range
 
-        min_t = self.intersect(positions, d)                                     # (E, R)
+        min_t, wall_idx = self.intersect(positions, d, return_index=True)        # (E, R)
         distances = min_t * self.max_range
 
         min_t_safe   = min_t.masked_fill(torch.isinf(min_t), 1.0)
         intersections = positions[:, None, :] + min_t_safe[:, :, None] * d      # (E, R, 2)
 
-        return intersections, distances, d_unit
+        return intersections, distances, d_unit, wall_idx
 
 class PerlinColor:
     """
@@ -176,6 +181,102 @@ class PerlinColor:
         chans = [self._fbm(p, x, y) for p in self.perms]   # 3 × (E, R)
         rgb = torch.stack(chans, dim=-1)                   # (E, R, 3)
         return (rgb + 1.0) * 0.5                            # → [0, 1]
+
+class GridCode:
+    """
+    Hand-crafted grid cell code of a 2D position (Solstad, Moser & Einevoll 2006).
+
+    Each cell fires as the sum of three plane waves 60° apart:
+        g(x) = (sum_k cos(k_k · (x - c)) + 1.5) / 4.5   in [0, 1]
+    with |k_k| = 4π / (√3 λ). Every module has its own spacing λ_m = min_spacing * spacing_ratio^m
+    and a random orientation, and holds `phases` cells with random offsets c inside the unit cell.
+    No training needed: a fixed, layout-agnostic alternative to the learned grid cells of Banino et al.
+
+    Query with (..., 2) positions, returns (..., modules * phases).
+    """
+
+    def __init__(self, modules=4, phases=16, min_spacing=60.0, spacing_ratio=1.42, seed=0, device="cpu"):
+        g = torch.Generator(device="cpu").manual_seed(seed)
+
+        spacings     = min_spacing * spacing_ratio ** torch.arange(modules, dtype=torch.float32)     # (M,)
+        orientations = torch.rand(modules, generator=g) * (torch.pi / 3)                             # (M,) hex symmetry repeats every 60°
+        wave_angles  = orientations[:, None] + torch.arange(3) * (torch.pi / 3)                      # (M, 3)
+        wave_norm    = 4 * torch.pi / (np.sqrt(3) * spacings)                                        # (M,)
+        k = wave_norm[:, None, None] * torch.stack([torch.cos(wave_angles), torch.sin(wave_angles)], dim=-1)  # (M, 3, 2)
+
+        # One random phase per cell, uniform over a spacing x spacing patch (covers the unit cell)
+        offsets = torch.rand(modules, phases, 2, generator=g) * spacings[:, None, None]               # (M, P, 2)
+
+        self.k = k.to(device)
+        self.offsets = offsets.to(device)
+        self.dim = modules * phases
+
+    def __call__(self, pos: torch.Tensor) -> torch.Tensor:
+        diff = pos[..., None, None, :] - self.offsets                              # (..., M, P, 2)
+        phase = torch.einsum("...mpd,mkd->...mpk", diff, self.k)                   # (..., M, P, 3)
+        g = (torch.cos(phase).sum(dim=-1) + 1.5) / 4.5                             # (..., M, P) in [0, 1]
+        return g.flatten(-2)
+
+class RandomFourierFeatures:
+    """
+    Random Fourier features of a 2D position (Tancik et al. 2020), the control for GridCode:
+    same output size and frequency range, but random directions instead of the 60° hexagonal structure.
+
+    Query with (..., 2) positions, returns (..., dim) in [0, 1].
+    """
+
+    def __init__(self, dim=64, min_spacing=60.0, max_spacing=60.0 * 1.42 ** 3, seed=0, device="cpu"):
+        g = torch.Generator(device="cpu").manual_seed(seed)
+        num_freqs = dim // 2
+
+        # Wavelengths log-uniform over the same range as the grid modules, random directions
+        log_spacing = torch.rand(num_freqs, generator=g) * (np.log(max_spacing) - np.log(min_spacing)) + np.log(min_spacing)
+        angles = torch.rand(num_freqs, generator=g) * 2 * torch.pi
+        freqs = (2 * torch.pi / torch.exp(log_spacing))[:, None] * torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
+
+        self.freqs = freqs.to(device)                                              # (F, 2)
+        self.shift = (torch.rand(num_freqs, generator=g) * 2 * torch.pi).to(device)
+        self.dim = 2 * num_freqs
+
+    def __call__(self, pos: torch.Tensor) -> torch.Tensor:
+        phase = pos @ self.freqs.T + self.shift                                    # (..., F)
+        return (torch.cat([torch.cos(phase), torch.sin(phase)], dim=-1) + 1.0) * 0.5
+
+# Discrete action sets as (turning, speed) in the continuous action's normalized units.
+# The agent picks an index, the env still receives a continuous action.
+DISCRETE_ACTION_TABLES = {
+    3: [[-0.5, 1.0], [0.0, 1.0], [0.5, 1.0]],
+    5: [[-1.0, 0.5], [-0.5, 1.0], [0.0, 1.0], [0.5, 1.0], [1.0, 0.5]],
+}
+
+GOAL_INFO_DIM = 5   # (distance, cos bearing, sin bearing, seen flag, age)
+
+def information_dims(cfg):
+    """
+    Sizes of the information slots appended to the proprio vector: (goal, position, goal grid).
+    With env.reserve_info_slots every slot is allocated (zeros when unused), so conditions that
+    differ only in what the agent is told share the same input size.
+    """
+    info = cfg.env.information
+    grid_dim = info.grid.modules * info.grid.phases
+    reserve = bool(info.reserve_info_slots)
+
+    goal_dim = GOAL_INFO_DIM if (reserve or info.goal_info != "none") else 0
+    if reserve:
+        position_dim = grid_dim
+    elif info.position_info == "none":
+        position_dim = 0
+    elif info.position_info == "xy":
+        position_dim = 2
+    else:
+        position_dim = grid_dim
+    goal_grid_dim = grid_dim if (reserve or info.goal_grid) else 0
+
+    return goal_dim, position_dim, goal_grid_dim
+
+def compute_proprio_dim(cfg):
+    """Base proprio (last speed, last turning, ...) plus the information slots."""
+    return cfg.env.proprio_dim + sum(information_dims(cfg))
 
 class LoopLabeler:
     def __init__(self, num_envs, max_len, eta1, eta2, env, device):

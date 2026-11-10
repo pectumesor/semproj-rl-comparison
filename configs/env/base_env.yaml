@@ -8,11 +8,20 @@ action_low: [-1.0, 0.0]
 action_high: [1.0, 1.0]
 
 max_speed: 13.0
-range_type: diagonal 
+# Max turn per step for action[0] = ±1. Used to be half the FOV, which made FOV sweeps
+# also change the action space; 90 keeps the old behaviour at fov=180
+max_turn_deg: 90
+range_type: diagonal
 ray_density: 0.2
 fov: 180
 
+# continuous: (turning, speed) Gaussian policy | discrete: categorical policy over a fixed
+# (turning, speed) table, see DISCRETE_ACTION_TABLES in envs/env_utils.py
+action_type: continuous
+discrete_actions: 3
+
 ray_encoding: 7
+# Base proprio (last speed, last turning). train.py adds the information slots below on top
 proprio_dim: 2
 
 rand_pos: "True"
@@ -21,6 +30,55 @@ num_envs: 256
 num_eval_envs: 50     # parallel episodes rolled out per evaluate_policy() call
 gamma: 0.99
 goal_radius: 4.0      # distance threshold to count as reaching the goal
+goal_visual_radius: ${.goal_radius}  # radius of the goal disk the rays can see
+# fixed: goal_pos from the room JSON | random: resampled every episode from the spawn regions
+# regions: one of the room's goal_points per episode (cue task, entering a wrong goal region fails)
+goal_mode: fixed
+min_goal_distance: 100.0  # goal_mode=random: min start-goal distance
+
+# Subtracted from the reward on every step a wall blocks the movement (0 = reset only, as before)
+collision_penalty: 0.0
+
+# Potential-based shaping toward the twin rooms' junction (E2): F = gamma * Phi(s') - Phi(s) with
+# Phi = -junction_shaping * d_J / d_J(start), d_J the path distance to the junction along the room's junction_path,
+# and Phi = 0 from the first step in the junction on. Both rooms lie past the junction, so it says nothing about
+# which room is right, and being potential-based it can't change the optimal policy (Ng et al. 1999). In the
+# pilot without it most seeds never got out of the alcove and corridor. Standing still earns (1 - gamma) * |Phi|
+# per step, below the 1/max_steps step penalty for gamma 0.999. Needs junction_path and junction_region in the
+# room JSON. 0 = off, as before
+junction_shaping: 0.0
+
+# Colour channels of the rays (4-6):
+#   global     Perlin field over world (x, y) -> acts as a place code
+#   room_local Perlin field over (x, y) mod colour_period -> same pattern repeats every colour_period
+#   off        black, geometry only
+#   per_wall   "colour" of each edge in the room JSON (default grey)
+# Cue walls ("cue": true) always show the episode's cue colour
+colour_mode: global
+colour_period: 200.0
+# Seed of the Perlin field, fixed across RL seeds (null = use the RL seed, the old behaviour)
+colour_seed: 0
+
+# Information slots appended to proprio (goal / position / goal grid code)
+information:
+  # none | oracle (true goal every step, through walls) | last_seen_updated (last sighting, re-expressed
+  # in the current frame by the env) | last_seen_frozen (last sighting as it looked then)
+  goal_info: none
+  # none | xy | rff (random Fourier features) | grid (hand-crafted grid code) | noisy_grid (grid code of
+  # a noisy path-integrated position)
+  position_info: none
+  goal_grid: false            # grid code of the goal position
+  # Always allocate every slot (zeros when unused) so conditions share the same input size
+  reserve_info_slots: false
+  seed: 0                     # orientations/phases of the grid code and the random Fourier features
+  grid:
+    modules: 4
+    phases: 16
+    min_spacing: 60.0         # world units (~100 units per maze cell)
+    spacing_ratio: 1.42       # grid module scale ratio (Stensola et al. 2012)
+  path_integration:
+    speed_noise: 0.05         # relative std of the travelled distance
+    heading_noise_deg: 2.0    # std of the heading per step
 
 completion_rate_eps: 10
 mean_of_means_runs: 10

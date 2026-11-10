@@ -1,0 +1,11 @@
+{
+  "eval_name": "adds-noisy-goal-ray",
+  "prompt": "for E3 i want one more goal condition: the oracle goal ray but noisy (gaussian noise on the bearing and the distance, std configurable). add it to the env, keep my style",
+  "assertions": [
+    "A noisy oracle goal condition is added to the config (a new goal_info value and/or noise std keys) with a comment, and the default behaviour of existing goal_info values is unchanged.",
+    "The noise is applied in a vectorised way over all envs (no Python loop over envs) and the goal information slot keeps its 5-dim size.",
+    "The new setting (the condition and its noise std) ends up in variant_name in scripts/train.py or is otherwise guaranteed to be part of the storage name.",
+    "The run executes a smoke training run or a focused test that exercises the new condition, and reports the result.",
+    "No git commit or push is made."
+  ]
+}

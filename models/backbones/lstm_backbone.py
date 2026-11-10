@@ -19,7 +19,15 @@ class SimpleLSTM(nn.Module):
                                 hidden_size=feature_dim,
                                 num_layers=num_layers,
                                 )
-        
+
+    @property
+    def num_layers(self):
+        return self.lstm.num_layers
+
+    @property
+    def hidden_size(self):
+        return self.lstm.hidden_size
+
     # --- INSPIRATION: Code seen on https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/,
     # on how stable-baselines3 implemented LSTM layers
     def forward(self, input_feats: torch.Tensor, lstm_state: tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
@@ -40,7 +48,52 @@ class SimpleLSTM(nn.Module):
 
         new_hidden = torch.flatten(torch.cat(new_hidden), 0, 1)
         return new_hidden, lstm_state
-    
+
+
+class SimpleGRU(nn.Module):
+    """
+    GRU backbone with the same interface as SimpleLSTM, so buffers, RecurrentPPO and the
+    rollout code stay unchanged: the state is still a (hidden, cell) tuple, where the cell
+    entry is carried along as zeros and ignored.
+
+    Args:
+        input_dim: Dimension size of the input features: (B, input_dim)
+        feature_dim: Dimension of the GRU hidden units and of the features fed into the heads: (B, feature_dim)
+    """
+
+    def __init__(self, input_dim: int, feature_dim: int, num_layers: int):
+        super().__init__()
+
+        self.gru = nn.GRU(input_size=input_dim,
+                          hidden_size=feature_dim,
+                          num_layers=num_layers,
+                          )
+
+    @property
+    def num_layers(self):
+        return self.gru.num_layers
+
+    @property
+    def hidden_size(self):
+        return self.gru.hidden_size
+
+    def forward(self, input_feats: torch.Tensor, state: tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
+
+        batch_size = state[0].shape[1]
+        hidden = input_feats.reshape((-1, batch_size, self.gru.input_size))
+        done = done.reshape((-1, batch_size)).float()
+        h_state, unused_cell = state
+        new_hidden = []
+        for features, episode_start in zip(hidden, done):
+            h, h_state = self.gru(
+                features.unsqueeze(0), # Shape: (1, batch_size, feature_dim)
+                (1.0 - episode_start).view(1, batch_size, 1) * h_state,
+            )
+            new_hidden += [h]
+
+        new_hidden = torch.flatten(torch.cat(new_hidden), 0, 1)
+        return new_hidden, (h_state, torch.zeros_like(unused_cell))
+
 
 class NAVA3C(nn.Module):
 

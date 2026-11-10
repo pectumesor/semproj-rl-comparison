@@ -1,5 +1,5 @@
 from models import (MLPObservationEmbeddings, CNNObservationEmbeddings,
-                     MLPBackbone, SimpleLSTM, GuassianPolicyHead, ValueNet, PPOAgent,
+                     MLPBackbone, SimpleLSTM, SimpleGRU, GuassianPolicyHead, CategoricalPolicyHead, ValueNet, PPOAgent,
                       SquashedGaussianPolicyHead, DoubleQNet, SACAgent, RecurrentPPOAgent,
                       FrameStackMLP, FrameStackCNN, DepthHead, LoopClosureHead)
 
@@ -15,27 +15,31 @@ import torch
 
 
 def create_observation_model(frame_stack: bool, observation_type: str, ray_dim: tuple, cfg: DictConfig):
+    output_activation = nn.ReLU if cfg.module_output_activation else nn.Identity
     if frame_stack:
         if observation_type == "mlp":
             return FrameStackMLP(
                 input_dim=np.prod(ray_dim) + cfg.env.proprio_dim,
                 stack_depth=cfg.observation.frame_stack.size,
                 hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
-                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
+                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                output_activation=output_activation
                 )
         else:
 
             return FrameStackCNN(stack_depth=cfg.observation.frame_stack.size,
                                 ray_channels=cfg.env.ray_encoding,
                                 cnn_out_channels=cfg.observation.cnn_output_channels,
-                                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
+                                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                                output_activation=output_activation
                                         )
     else:
         if observation_type == "mlp":
             return MLPObservationEmbeddings(
                 input_dim=np.prod(ray_dim) + cfg.env.proprio_dim,
                 hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
-                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1]
+                out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                output_activation=output_activation
             )
         else:
             return CNNObservationEmbeddings(ray_channels=cfg.env.ray_encoding,
@@ -44,6 +48,7 @@ def create_observation_model(frame_stack: bool, observation_type: str, ray_dim: 
                                         proprio_dim=cfg.env.proprio_dim,
                                         proprio_hidden_sizes=cfg.observation.obs_embed_hidden_sizes,
                                         out_feature_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                                        output_activation=output_activation
                                         )
     
 def create_environment(cfg: DictConfig, agent, num_rays: int, ray_dim: tuple, num_envs: int, device: str = "cpu"):
@@ -63,12 +68,32 @@ def create_backbone_model(backbone_type: str, cfg: DictConfig):
 
         return MLPBackbone(input_dim=cfg.observation.obs_embed_hidden_sizes[-1],
                            hidden_sizes=cfg.backbone.backbone_hidden_sizes,
-                           output_dim=cfg.backbone.backbone_hidden_sizes[-1])
+                           output_dim=cfg.backbone.backbone_hidden_sizes[-1],
+                           output_activation=nn.ReLU if cfg.module_output_activation else nn.Identity)
     elif backbone_type == "lstm":
 
         return SimpleLSTM(input_dim=cfg.observation.obs_embed_hidden_sizes[-1],
                           feature_dim= cfg.backbone.lstm_backbone_feature_dim,
                           num_layers=cfg.backbone.lstm_num_layers)
+    elif backbone_type == "gru":
+
+        return SimpleGRU(input_dim=cfg.observation.obs_embed_hidden_sizes[-1],
+                         feature_dim= cfg.backbone.lstm_backbone_feature_dim,
+                         num_layers=cfg.backbone.lstm_num_layers)
+    else:
+        raise ValueError(f"Unknown backbone {backbone_type}")
+
+def create_policy_head(cfg: DictConfig):
+    from envs import DISCRETE_ACTION_TABLES  # deferred: envs -> utils.geometry -> utils -> models is circular at module scope
+
+    if cfg.env.get("action_type", "continuous") == "discrete":
+        return CategoricalPolicyHead(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
+                                     action_table=DISCRETE_ACTION_TABLES[cfg.env.discrete_actions],
+                                     hidden_sizes=cfg.head.policy_hidden_sizes)
+
+    return GuassianPolicyHead(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
+                              actions_dim=cfg.env.act_dim,
+                              hidden_sizes=cfg.head.policy_hidden_sizes)
     
 def create_agent(sb3_flag: bool, cfg: DictConfig, ray_dim: tuple, env = None, tensorboard_log: str = None):
 
@@ -82,9 +107,7 @@ def create_agent(sb3_flag: bool, cfg: DictConfig, ray_dim: tuple, env = None, te
                                         tensorboard_log=tensorboard_log)
     else: # Create my custom agent
         if cfg.algorithm.name == "ppo":
-            return create_ppo_agent(observation_type=cfg.observation.name,
-                                    backbone_type=cfg.backbone.name, ray_dim=ray_dim,
-                                    cfg=cfg)
+            return create_ppo_agent(ray_dim=ray_dim, cfg=cfg)
         else:
             return create_sac_agent(observation_type=cfg.observation.name, ray_dim=ray_dim,
                                     cfg=cfg)
@@ -101,12 +124,12 @@ def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
     backbone_model = create_backbone_model(backbone_type=cfg.backbone.name,
                                            cfg=cfg)
 
-    actor = GuassianPolicyHead(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
-                                actions_dim=cfg.env.act_dim,
-                                hidden_sizes=cfg.head.policy_hidden_sizes)
+    actor = create_policy_head(cfg)
         
     critic = ValueNet(backbone_dim=cfg.backbone.backbone_hidden_sizes[-1],
                      hidden_sizes=cfg.head.value_hidden_sizes)
+
+    masked_channels = list(cfg.observation.get("masked_channels", []))
     
     if cfg.backbone.name == "mlp":
         depth_head = None
@@ -120,7 +143,7 @@ def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
                         backbone_model= backbone_model,
                         actor=actor, critic=critic,
                         action_low=cfg.env.action_low, action_high=cfg.env.action_high,
-                        depth_head=depth_head)
+                        depth_head=depth_head, masked_channels=masked_channels)
     else:
         depth_head, loop_closure_head = None, None
         aux_cfg = cfg.head.auxiliary_head
@@ -136,11 +159,13 @@ def create_ppo_agent(ray_dim: tuple,  cfg: DictConfig):
                                  backbone_model= backbone_model,
                                  actor=actor, critic=critic,
                                  action_low=cfg.env.action_low, action_high=cfg.env.action_high,
-                                 depth_head=depth_head, loop_closure_head=loop_closure_head)
+                                 depth_head=depth_head, loop_closure_head=loop_closure_head,
+                                 masked_channels=masked_channels)
 
 def create_sac_agent(observation_type: str, ray_dim:int, cfg: DictConfig):
      
-    observation_model = create_observation_model(observation_type=observation_type,
+    observation_model = create_observation_model(frame_stack=cfg.observation.frame_stack.enabled,
+                                                 observation_type=observation_type,
                                                  ray_dim=ray_dim,
                                                  cfg=cfg
                                                 )

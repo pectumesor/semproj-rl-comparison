@@ -12,10 +12,11 @@ class MLPBackbone(nn.Module):
     def __init__(self,
                  input_dim: int,
                  hidden_sizes: Sequence[int],
-                 output_dim: int):
+                 output_dim: int,
+                 output_activation=nn.Identity):
         super().__init__()
 
-        self.net = build_mlp(input_dim, hidden_sizes, output_dim)
+        self.net = build_mlp(input_dim, hidden_sizes, output_dim, output_activation=output_activation)
 
     def forward(self, observation_feats: torch.Tensor) -> torch.Tensor:
         return self.net(observation_feats)

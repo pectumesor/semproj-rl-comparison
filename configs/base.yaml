@@ -14,6 +14,10 @@ wandb:
 
 seed: 0
 
+# Each module (embedding, MLP backbone) ends in a plain linear layer, so its output feeds the next module's
+# first linear layer without a nonlinearity and the two act as one linear map. True adds a ReLU after them
+module_output_activation: false
+
 # Checkpoints and per-seed metric arrays go to
 # <storage>/{models,eval_metrics}/<timestamp>/<room>/<architecture>/seed_<s>
 storage: ${hydra:runtime.cwd}/logs

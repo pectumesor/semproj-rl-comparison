@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "A new .sh file exists under scripts/ with the conda/Euler setup header, a join() helper, a single NOW timestamp and a final scripts/evaluate_metrics.py call.",
+      "passed": true,
+      "evidence": "scripts/e1_gru_trigger.sh has the eth_proxy/conda header, join() on line 69, NOW on line 59 (optional E1 timestamp argument) and evaluate_metrics.py on line 89."
+    },
+    {
+      "text": "The script trains backbone=gru_backbone on rooms/C_maze.json and rooms/medium_maze.json with env.colour_mode=off and env.goal_mode=random.",
+      "passed": true,
+      "evidence": "BACKBONE_NN=(gru_backbone); rooms are C_maze and medium_maze; COLOUR_MODE=off and GOAL_MODE=random."
+    },
+    {
+      "text": "The script reuses E1's long-room settings (algorithm.max_steps=4096, env.gamma=0.999, env.goal_radius=16, a 720-minute timeout) and E1's seeds, so the GRU runs are comparable with the E1 LSTM and MLP runs.",
+      "passed": true,
+      "evidence": "GOAL_RADIUS=16, GAMMA=0.999, EPISODE_LENGTH=4096, timeout_min=720; SEEDS=(0 1 2 3 4), the same as E1."
+    },
+    {
+      "text": "The final reply says the GRU result is reported as a robustness check whatever the outcome, and not as the best of LSTM and GRU.",
+      "passed": true,
+      "evidence": "Header line 44 and the reply say 'reported whatever it shows, never merged into best of LSTM and GRU'."
+    },
+    {
+      "text": "The run neither launches the sweep nor makes a git commit or push.",
+      "passed": true,
+      "evidence": "The reply says it hasn't run or submitted anything; git log has only harness commits."
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

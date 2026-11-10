@@ -11,7 +11,8 @@ class RecurrentAgent(nn.Module):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: SimpleLSTM,
                  actor: GuassianPolicyHead, critic: nn.Module,
-                 depth_head: DepthHead = None, loop_closure_head: LoopClosureHead = None):
+                 depth_head: DepthHead = None, loop_closure_head: LoopClosureHead = None,
+                 masked_channels=()):
         super().__init__()
         self.obs_embed_model = obs_embed_model
         self.backbone_model = backbone_model
@@ -20,6 +21,8 @@ class RecurrentAgent(nn.Module):
 
         self.depth_head = depth_head
         self.loop_closure_head = loop_closure_head
+        # Ray channels zeroed before the observation embedding (e.g. [3] hides the distances the depth aux head predicts)
+        self.masked_channels = list(masked_channels)
         
     def forward(self, obs,
                 lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
@@ -44,6 +47,9 @@ class RecurrentAgent(nn.Module):
         proprio_dims = 2 if frame_stacked else 1
 
         rays = obs['rays'].reshape(-1, *obs['rays'].shape[-rays_dims:])
+        if self.masked_channels:
+            rays = rays.clone()
+            rays[..., self.masked_channels, :] = 0.0
         proprio = obs['proprio'].reshape(-1, *obs['proprio'].shape[-proprio_dims:])
         return self.obs_embed_model(rays, proprio)
     

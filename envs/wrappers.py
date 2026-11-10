@@ -70,7 +70,7 @@ class FrameStackWrapper(gym.Wrapper):
         return {key: val.clone() for key, val in self._stack.items()}, reward, terminated, truncated, info
 
     def record_rollout(self, backbone_type, agent, steps, cfg: DictConfig):
-        if backbone_type == "lstm":
+        if backbone_type != "mlp": # Recurrent backbones (lstm, gru)
             return self.record_recurrent_rollout(agent, cfg.backbone.lstm_num_layers,
                                                   cfg.backbone.lstm_backbone_feature_dim, steps)
         else:
@@ -143,7 +143,7 @@ class NavigationEnvSB3(gym.Env):
 
     def _flatten_obs(self, obs: dict) -> np.ndarray:
         rays   = obs["rays"][0].cpu().numpy().flatten()   # (C*R,)
-        proprio = obs["proprio"][0].cpu().numpy()          # (4,)
+        proprio = obs["proprio"][0].cpu().numpy()          # (proprio_dim,)
         return np.concatenate([rays, proprio]).astype(np.float32)
 
     def reset(self, seed=None, options=None):
@@ -188,9 +188,9 @@ class NavigationEnvSB3(gym.Env):
         pygame.draw.circle(self.screen, (0, 100, 255),
                             w2s(self._env.agent_pos[0], scale, _SCREEN, _PADDING), 6)
         pygame.draw.circle(self.screen, (0, 255, 0),
-                            w2s(self._env.goal_pos, scale, _SCREEN, _PADDING), 8)
+                            w2s(self._env.goal_pos[0], scale, _SCREEN, _PADDING), 8)
 
-        intersect, _, _ = self._env.ray_cast.scan(self._env.agent_pos, self._env.facing_direction)
+        intersect, _, _, _ = self._env.ray_cast.scan(self._env.agent_pos, self._env.facing_direction)
         agent_screen = w2s(self._env.agent_pos[0], scale, _SCREEN, _PADDING)
         for i,ray in enumerate(intersect[0]):   # env 0 rays: (num_rays, 2)
             color = rays[4:, i]
@@ -225,9 +225,9 @@ class NavigationEnvSB3(gym.Env):
         pygame.draw.circle(self._rec_screen, (0, 100, 255),
                            w2s(self._env.agent_pos[0], scale, _SCREEN, _PADDING), 6)
         pygame.draw.circle(self._rec_screen, (0, 255, 0),
-                           w2s(self._env.goal_pos, scale, _SCREEN, _PADDING), 8)
+                           w2s(self._env.goal_pos[0], scale, _SCREEN, _PADDING), 8)
 
-        intersect, _, _ = self._env.ray_cast.scan(self._env.agent_pos, self._env.facing_direction)
+        intersect, _, _, _ = self._env.ray_cast.scan(self._env.agent_pos, self._env.facing_direction)
         agent_screen = w2s(self._env.agent_pos[0], scale, _SCREEN, _PADDING)
         for i, ray in enumerate(intersect[0]):
             color = rays[4:, i]

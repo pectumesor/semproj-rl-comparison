@@ -1,0 +1,11 @@
+{
+  "eval_name": "compares-backbones-from-metrics",
+  "prompt": "the E1 four_room runs are back (colour off, random goal), i copied the metric arrays into eval_metrics/20261105_101500/four_room/ in the repo. is the LSTM better than the MLP there? give me the numbers and a significance statement i can put in the paper\n\nInput files: eval_metrics/20261105_101500/four_room/",
+  "assertions": [
+    "The analysis uses one value per training seed (5 per backbone) as the unit for the comparison, rather than pooling the 50 individual eval runs per backbone.",
+    "The response concludes the LSTM\u2013MLP difference on four_room is not statistically significant (a seed-level test gives p well above 0.05, about 0.3).",
+    "The response reports per-backbone success with an uncertainty estimate across seeds (CI, standard error, or IQM with bootstrap CI).",
+    "The response points out that seeds 0\u20134 include the screening seeds (0\u20132) that should not be used for reported/final results, or otherwise recommends fresh seeds for the paper claim.",
+    "The paper-ready statement does not claim that the LSTM is significantly better than the MLP."
+  ]
+}

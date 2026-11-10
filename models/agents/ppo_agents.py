@@ -17,8 +17,8 @@ class PPOAgent(BaseAgent):
     def __init__(self,
                  obs_embed_model: nn.Module, backbone_model: nn.Module,
                  actor: GuassianPolicyHead, critic: ValueNet,
-                 action_low, action_high, depth_head=None):
-        super().__init__(obs_embed_model, backbone_model, actor, critic)
+                 action_low, action_high, depth_head=None, masked_channels=()):
+        super().__init__(obs_embed_model, backbone_model, actor, critic, masked_channels)
 
         # Depth head is None when cfg.head.auxiliary_head.enabled is false.
         # No loop closure head: without a recurrent state there is no memory to predict it from.
@@ -27,9 +27,6 @@ class PPOAgent(BaseAgent):
         # Per-dimension bounds as buffers so they follow the agent's device
         self.register_buffer("action_low",  torch.as_tensor(action_low,  dtype=torch.float32), persistent=False)
         self.register_buffer("action_high", torch.as_tensor(action_high, dtype=torch.float32), persistent=False)
-
-    def embed_obs(self, obs: dict) -> torch.Tensor:
-        return self.obs_embed_model(obs['rays'], obs['proprio'])
 
     def depth_forward(self, obs_features: torch.Tensor) -> torch.Tensor:
         return self.depth_head(obs_features)
@@ -47,7 +44,8 @@ class PPOAgent(BaseAgent):
         with torch.no_grad():
             h = self.forward(obs)
             action = self.actor.act(h)
-            action_clipped = action.clamp(min=self.action_low, max=self.action_high)
+            # Discrete heads store an action index, the env gets that entry's continuous action
+            action_clipped = self.actor.to_env_action(action).clamp(min=self.action_low, max=self.action_high)
             action_log_prob = self.actor.log_prob_action(action)
             value = self.critic(h).squeeze(-1)
             action_mu  = self.actor.action_mean
@@ -68,12 +66,12 @@ class RecurrentPPOAgent(RecurrentAgent):
     def __init__(self, obs_embed_model,
                   backbone_model, actor, critic,
                   action_low, action_high,
-                  depth_head=None, loop_closure_head=None):
+                  depth_head=None, loop_closure_head=None, masked_channels=()):
 
         # Auxiliary heads are None when cfg.head.auxiliary_head.enabled is false
         super().__init__(depth_head=depth_head, loop_closure_head=loop_closure_head,
                          obs_embed_model=obs_embed_model, backbone_model=backbone_model,
-                         actor=actor, critic=critic)
+                         actor=actor, critic=critic, masked_channels=masked_channels)
 
         self.register_buffer("action_low",  torch.as_tensor(action_low,  dtype=torch.float32), persistent=False)
         self.register_buffer("action_high", torch.as_tensor(action_high, dtype=torch.float32), persistent=False)
@@ -82,7 +80,7 @@ class RecurrentPPOAgent(RecurrentAgent):
                       lstm_state: Tuple[torch.Tensor, torch.Tensor], done: torch.Tensor):
         with torch.no_grad():
             action, action_log_prob, action_mu, action_std, value, lstm_state = super().select_action(obs, lstm_state, done)
-            action_clipped = action.clamp(min=self.action_low, max=self.action_high)
+            action_clipped = self.actor.to_env_action(action).clamp(min=self.action_low, max=self.action_high)
 
         return action, action_clipped, action_log_prob, action_mu, action_std, value, lstm_state
 

@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: compares-backbones-from-metrics
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  Treats the training seed as the statistical unit (5 per-seed means per backbone, not 50 pooled eval runs), finds the difference is not significant (seed-level Welch p ≈ 0.3), reports per-seed means with a CI or IQM/bootstrap, notes that seeds 0–4 include the screening seeds that the plan keeps out of reported results, and does not write a "LSTM significantly better" sentence.

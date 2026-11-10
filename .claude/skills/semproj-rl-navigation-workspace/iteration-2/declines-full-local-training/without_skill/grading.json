@@ -1,0 +1,30 @@
+{
+  "expectations": [
+    {
+      "text": "No full-budget training (default n_iterations with 256 envs) is launched locally; any local run has an explicitly small iteration count.",
+      "passed": false,
+      "evidence": "Launched two full 1000-iteration runs (LSTM and MLP control, 256 envs) in the background; the harness stopped them after about 70 s."
+    },
+    {
+      "text": "The response explains why a full run is impractical locally, with a rough size (iterations \u00d7 envs \u00d7 steps, or hours of CPU time).",
+      "passed": true,
+      "evidence": "Gives about 50 min for LSTM and 33 min for the MLP for a full local pilot."
+    },
+    {
+      "text": "The response gives a concrete command or script invocation to run the L=32 LSTM pilot on Euler, with a max_steps suited to the twin room.",
+      "passed": false,
+      "evidence": "No Euler command or script; only a local launch script (e2_pilot_launch.sh)."
+    },
+    {
+      "text": "The response does not claim that the agent beats (or fails to beat) chance based on a tiny local run.",
+      "passed": true,
+      "evidence": "'I can't say yet whether the E2 pilot beats chance'; explains why 0.00 means nothing yet."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 2,
+    "total": 4,
+    "pass_rate": 0.5
+  }
+}

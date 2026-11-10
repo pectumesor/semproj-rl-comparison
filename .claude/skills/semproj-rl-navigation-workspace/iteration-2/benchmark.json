@@ -1,0 +1,325 @@
+{
+  "metadata": {
+    "skill_name": "semproj-rl-navigation",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-10-29T14:11:38Z",
+    "evals_run": [
+      "compares-backbones-from-metrics",
+      "declines-full-local-training",
+      "resets-memory-at-junction"
+    ],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {
+      "eval_id": "compares-backbones-from-metrics",
+      "eval_name": "compares-backbones-from-metrics",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 128.0,
+        "tokens": 96465,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The analysis uses one value per training seed (5 per backbone) as the unit for the comparison, rather than pooling the 50 individual eval runs per backbone.",
+          "passed": true,
+          "evidence": "Averages the 10 runs per seed first; n = 5 per arm; Welch t(6.5)."
+        },
+        {
+          "text": "The response concludes the LSTM\u2013MLP difference on four_room is not statistically significant (a seed-level test gives p well above 0.05, about 0.3).",
+          "passed": true,
+          "evidence": "AUC p = 0.052, CR p = 0.32; 'not significant at the pre-registered \u03b1 = 0.01, and not at 0.05 either'."
+        },
+        {
+          "text": "The response reports per-backbone success with an uncertainty estimate across seeds (CI, standard error, or IQM with bootstrap CI).",
+          "passed": true,
+          "evidence": "Mean \u00b1 SE and IQM with 95% bootstrap CI per backbone; P(improvement) with CI."
+        },
+        {
+          "text": "The response points out that seeds 0\u20134 include the screening seeds (0\u20132) that should not be used for reported/final results, or otherwise recommends fresh seeds for the paper claim.",
+          "passed": true,
+          "evidence": "Flags the plan conflict: E1 seeds 0\u20134 vs the screening-seed rule; suggests rerunning on 1000\u20131009."
+        },
+        {
+          "text": "The paper-ready statement does not claim that the LSTM is significantly better than the MLP.",
+          "passed": true,
+          "evidence": "The paper sentence frames the result as a non-significant trend."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "declines-full-local-training",
+      "eval_name": "declines-full-local-training",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 88.4,
+        "tokens": 74166,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "No full-budget training (default n_iterations with 256 envs) is launched locally; any local run has an explicitly small iteration count.",
+          "passed": true,
+          "evidence": "Ran only a smoke test plus a 3-iteration timing probe; asked before any full run."
+        },
+        {
+          "text": "The response explains why a full run is impractical locally, with a rough size (iterations \u00d7 envs \u00d7 steps, or hours of CPU time).",
+          "passed": true,
+          "evidence": "About 2.9 s/iteration \u2192 50\u201360 min per seed for 1000 iterations; early stopping won't trigger near 0.5."
+        },
+        {
+          "text": "The response gives a concrete command or script invocation to run the L=32 LSTM pilot on Euler, with a max_steps suited to the twin room.",
+          "passed": false,
+          "evidence": "Describes an Euler-only pilot (LSTM, L=32, seeds 0\u20132) and offers to write scripts/e2_pilot.sh, but the only concrete command is a local hydra/launcher=basic one; no Euler command is given."
+        },
+        {
+          "text": "The response does not claim that the agent beats (or fails to beat) chance based on a tiny local run.",
+          "passed": true,
+          "evidence": "Says iteration-3 success of 0.00 is meaningless; 'beats chance' only makes sense late in training."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "resets-memory-at-junction",
+      "eval_name": "resets-memory-at-junction",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 547.8,
+        "tokens": 166100,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The reset is an evaluation-only option that is off by default, and training/rollout collection is unchanged.",
+          "passed": true,
+          "evidence": "Separate scripts/junction_reset.py evaluates checkpoints; training unchanged ('training behaviour is unchanged')."
+        },
+        {
+          "text": "Only the envs that just entered the junction get their recurrent state zeroed (a per-env mask), and each env is reset once per episode, not every step it spends in the junction.",
+          "passed": true,
+          "evidence": "Reuses the episode-start flag only on the first step inside the junction; the test checks exactly one reset per env."
+        },
+        {
+          "text": "The junction region is derived from the room JSON or twin-room generator geometry so it works for every L, not hard-coded coordinates for a single room.",
+          "passed": true,
+          "evidence": "Adds junction_region to generate_twin_rooms.py and regenerates all L files; read via junction_region_json()."
+        },
+        {
+          "text": "The new path is actually run (test or smoke evaluation) for both an LSTM and a GRU agent.",
+          "passed": true,
+          "evidence": "Test parametrised for LSTM and GRU; end-to-end runs on LSTM and GRU smoke checkpoints."
+        },
+        {
+          "text": "No git commit or push is made.",
+          "passed": true,
+          "evidence": "Only the harness snapshot commit in git log."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "compares-backbones-from-metrics",
+      "eval_name": "compares-backbones-from-metrics",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 108.5,
+        "tokens": 98973,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The analysis uses one value per training seed (5 per backbone) as the unit for the comparison, rather than pooling the 50 individual eval runs per backbone.",
+          "passed": true,
+          "evidence": "'Each seed's 10 eval runs are averaged first, so the sample is 5 seeds per backbone'."
+        },
+        {
+          "text": "The response concludes the LSTM\u2013MLP difference on four_room is not statistically significant (a seed-level test gives p well above 0.05, about 0.3).",
+          "passed": true,
+          "evidence": "AUC p = 0.052, CR p = 0.32; misses \u03b1 = 0.05 and 0.01."
+        },
+        {
+          "text": "The response reports per-backbone success with an uncertainty estimate across seeds (CI, standard error, or IQM with bootstrap CI).",
+          "passed": true,
+          "evidence": "Mean \u00b1 SD per backbone and the \u0394 with a 95% CI; Hedges' g."
+        },
+        {
+          "text": "The response points out that seeds 0\u20134 include the screening seeds (0\u20132) that should not be used for reported/final results, or otherwise recommends fresh seeds for the paper claim.",
+          "passed": true,
+          "evidence": "'E1 uses seeds 0\u20134, which overlap the plan's screening seeds\u2026 should be rerun on fresh seeds'."
+        },
+        {
+          "text": "The paper-ready statement does not claim that the LSTM is significantly better than the MLP.",
+          "passed": true,
+          "evidence": "The paper paragraph says 5 seeds don't establish an LSTM advantage."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "declines-full-local-training",
+      "eval_name": "declines-full-local-training",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.5,
+        "passed": 2,
+        "failed": 2,
+        "total": 4,
+        "time_seconds": 273.6,
+        "tokens": 99001,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "No full-budget training (default n_iterations with 256 envs) is launched locally; any local run has an explicitly small iteration count.",
+          "passed": false,
+          "evidence": "Launched two full 1000-iteration runs (LSTM and MLP control, 256 envs) in the background; the harness stopped them after about 70 s."
+        },
+        {
+          "text": "The response explains why a full run is impractical locally, with a rough size (iterations \u00d7 envs \u00d7 steps, or hours of CPU time).",
+          "passed": true,
+          "evidence": "Gives about 50 min for LSTM and 33 min for the MLP for a full local pilot."
+        },
+        {
+          "text": "The response gives a concrete command or script invocation to run the L=32 LSTM pilot on Euler, with a max_steps suited to the twin room.",
+          "passed": false,
+          "evidence": "No Euler command or script; only a local launch script (e2_pilot_launch.sh)."
+        },
+        {
+          "text": "The response does not claim that the agent beats (or fails to beat) chance based on a tiny local run.",
+          "passed": true,
+          "evidence": "'I can't say yet whether the E2 pilot beats chance'; explains why 0.00 means nothing yet."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "resets-memory-at-junction",
+      "eval_name": "resets-memory-at-junction",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 408.3,
+        "tokens": 142334,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The reset is an evaluation-only option that is off by default, and training/rollout collection is unchanged.",
+          "passed": true,
+          "evidence": "junction_reset_rollouts is evaluation-only; reset_at_junction flag; training untouched."
+        },
+        {
+          "text": "Only the envs that just entered the junction get their recurrent state zeroed (a per-env mask), and each env is reset once per episode, not every step it spends in the junction.",
+          "passed": true,
+          "evidence": "done = done | entered, once per episode; the test checks the flag rises exactly once."
+        },
+        {
+          "text": "The junction region is derived from the room JSON or twin-room generator geometry so it works for every L, not hard-coded coordinates for a single room.",
+          "passed": true,
+          "evidence": "junction_region added to the generator and all twin_rooms_L*.json; read by junction_region_json()."
+        },
+        {
+          "text": "The new path is actually run (test or smoke evaluation) for both an LSTM and a GRU agent.",
+          "passed": true,
+          "evidence": "Tests test_reset_at_junction_zeroes_state_once[lstm|gru]; script run end to end on untrained LSTM and GRU checkpoints."
+        },
+        {
+          "text": "No git commit or push is made.",
+          "passed": true,
+          "evidence": "Only the harness snapshot commit in git log."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 0.9167,
+        "stddev": 0.1443,
+        "min": 0.75,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 254.7333,
+        "stddev": 254.5743,
+        "min": 88.4,
+        "max": 547.8
+      },
+      "tokens": {
+        "mean": 112243.6667,
+        "stddev": 47955.0814,
+        "min": 74166,
+        "max": 166100
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.8333,
+        "stddev": 0.2887,
+        "min": 0.5,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 263.4667,
+        "stddev": 150.1567,
+        "min": 108.5,
+        "max": 408.3
+      },
+      "tokens": {
+        "mean": 113436.0,
+        "stddev": 25026.406,
+        "min": 98973,
+        "max": 142334
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.08",
+      "time_seconds": "-8.7",
+      "tokens": "-1192"
+    }
+  },
+  "notes": [
+    "The only discriminating test was declines-full-local-training. Without the skill, the agent launched two full 1000-iteration runs on the laptop in the background (stopped by the harness). With the skill, it ran a 3-iteration timing probe and asked first. Neither gave a concrete Euler command.",
+    "Premise check: a full L=32 pilot takes about 50\u201360 min per seed locally (2.9 s/iteration), so 'never run long training locally' is stricter than needed. The skill should say a single short pilot is OK if the user explicitly asks, and should push agents to hand over a ready Euler command rather than only offering to write one.",
+    "Stats and junction-reset: both configurations passed everything. The plan doc and research notes already cover statistics and seed sets, so baseline agents read them.",
+    "Both junction-reset runs independently found a real E2 design bug: the alcove's back cue wall is visible straight down the corridor from the junction (edge ray of the 180\u00b0 FOV), at every L. The coordinator confirmed it on rooms/twin_rooms_L*.json. A memoryless agent could re-read the cue, so E2 needs a geometry fix before launch.",
+    "Timing caveat: every run was interrupted by an API limit and resumed, so token/time figures may only cover the resumed part. Treat them as rough."
+  ]
+}

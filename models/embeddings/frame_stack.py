@@ -12,10 +12,11 @@ class FrameStackMLP(nn.Module):
                 input_dim: int,
                 stack_depth: int,
                 hidden_sizes: Sequence[int],
-                out_feature_dim: int):
+                out_feature_dim: int,
+                output_activation=nn.Identity):
         super().__init__()
 
-        self.net = build_mlp(input_dim * stack_depth, hidden_sizes, out_feature_dim)
+        self.net = build_mlp(input_dim * stack_depth, hidden_sizes, out_feature_dim, output_activation=output_activation)
 
     def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
             # Input:
@@ -40,12 +41,14 @@ class FrameStackCNN(nn.Module):
                 stack_depth: int,
                 ray_channels: int,
                 cnn_out_channels: int,
-                out_feature_dim: int):
+                out_feature_dim: int,
+                output_activation=nn.Identity):
         super().__init__()
 
         # TODO: During experiments decide on the appropriate cnn_block depth
         self.block = nn.Sequential(*cnn_block(input_channels= stack_depth * ray_channels, output_channels= cnn_out_channels))
         self.feature_map = nn.LazyLinear(out_feature_dim) # input dim depends on ray_dim, inferred on first forward
+        self.output_activation = output_activation()
 
     def forward(self, rays: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
             # Input:
@@ -59,4 +62,4 @@ class FrameStackCNN(nn.Module):
             proprio_flat = proprio.reshape(num_envs, -1) # (E,F,4) -> (E, F*4)
 
             x = torch.cat([cnn_feat, proprio_flat], dim=-1)
-            return self.feature_map(x)
+            return self.output_activation(self.feature_map(x))
