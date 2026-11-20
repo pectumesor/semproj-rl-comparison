@@ -1,0 +1,118 @@
+{
+ "status": "Explained",
+ "widths": [
+  0.17,
+  0.11,
+  0.19,
+  0.17,
+  0.13,
+  0.23
+ ],
+ "rows": [
+  [
+   "Backbone, interval",
+   "Success",
+   "Blinded from the bend",
+   "Blinded from 50%",
+   "Junction step",
+   "Reading"
+  ],
+  [
+   "LSTM, every 4",
+   "0.96–1.00",
+   "0.89–1.00",
+   "0.92–1.00",
+   "61–79",
+   "memory (5/5)"
+  ],
+  [
+   "LSTM, every 16",
+   "0.98–1.00",
+   "0.97–1.00",
+   "0.98–1.00",
+   "63–71",
+   "memory (5/5)"
+  ],
+  [
+   "LSTM, every 64",
+   "0.95–0.99",
+   "0.50–0.51 (3 seeds), 0.95–0.99 (2)",
+   "same",
+   "60–73",
+   "memory 2/5, late telling 3/5"
+  ],
+  [
+   "MLP, every 4",
+   "0.91–0.99",
+   "0.42–0.50",
+   "0.36–0.50",
+   "54–59",
+   "needs tellings in the corridor"
+  ],
+  [
+   "MLP, every 16",
+   "0.47–0.78",
+   "0.07–0.51",
+   "0.10–0.50",
+   "53–60",
+   "at chance"
+  ],
+  [
+   "MLP, every 64",
+   "0.48–0.66",
+   "0.22–0.50",
+   "0.46–0.50",
+   "56–67",
+   "at chance"
+  ],
+  [
+   "FS16, every 16",
+   "1.00 (4 seeds)",
+   "0.45–0.54",
+   "0.50–0.87",
+   "49–54",
+   "needs tellings in the corridor"
+  ],
+  [
+   "FS16, every 64",
+   "0.99–1.00 (4 seeds)",
+   "0.42–0.50",
+   "0.42–0.50",
+   "50–59",
+   "reads the step-64 telling after the junction"
+  ],
+  [
+   "LSTM, every 64, random phase",
+   "0.97–0.99",
+   "0.97–0.99",
+   "0.97–0.99",
+   "62–68",
+   "memory (5/5)"
+  ],
+  [
+   "MLP, every 64, random phase",
+   "0.47–0.53",
+   "0.48–0.52",
+   "0.48–0.52",
+   "53–71",
+   "at chance"
+  ],
+  [
+   "FS16, every 64, random phase",
+   "0.95–1.00",
+   "0.94–1.00",
+   "0.95–1.00",
+   "50–58",
+   "body memory (5/5)"
+  ]
+ ],
+ "caption": "1000 episodes per seed and run, same episodes in all three runs (same seed). Junction step = median episode step at which the agent reaches the junction, range over seeds. The last three rows are the rerun with a random telling phase (first telling at a uniform step 0–63, then every 64; 15 runs, Nov 15–16).",
+ "bullets": [
+  "<b>At L = 32 the step-64 telling lands at the decision.</b> Agents reach the junction 50–79 steps into the episode, so the second telling arrives just before the junction (slower LSTM seeds) or just after it, before a room is entered (FS16). \"Every 64\" is in practice \"told at the start and again at the decision\".",
+  "<b>FS16's 4/5 at every 64 is not body memory:</b> blinded from the bend it falls to chance on every seed. Its \"every 16\" success also needs the tellings inside the corridor.",
+  "<b>The LSTM remembers at every 4 and 16</b> (blinding changes nothing), but at every 64 only 2 of 5 seeds do; the other 3 wait for the late telling.",
+  "<b>The MLP's \"every 4\" success needs the tellings in the corridor</b> (blinded: chance). Steering bridges the 3 blank steps between tellings, not the corridor.",
+  "<b>Rerun with a random telling phase (15 runs):</b> the last telling before the junction is now 0–63 steps old (median 24–32). The LSTM solves 5/5 and swapping its recurrent state flips the choice (hidden_other 0.01–0.02), so it remembers. The MLP stays at chance; only a telling 0–3 steps old lifts it a little (0.55–0.68 on 4 seeds).",
+  "<b>FS16 now solves 5/5 by body memory:</b> success doesn't change when blinded from the bend and is 0.99–1.00 even when the last telling is 32–63 steps old, beyond its 16 frames; the cue is decodable from its pose at the junction at 0.96–1.00. With the late telling gone, training found the body-memory strategy that FS16 never found when never told (0/5) or with the fixed phase."
+ ]
+}

@@ -39,6 +39,7 @@ class NavigationEnv(gym.Env):
             goal      (5)  distance, cos/sin of the egocentric bearing, seen flag, age
             position  (G)  xy / random Fourier features / grid code / grid code of a noisy path integration
             goal grid (G)  grid code of the goal position
+            cue       (4)  one-hot of the cued room on every cue_interval-th step, zeros otherwise
 
 
     Action: (num_envs, 2)
@@ -163,7 +164,18 @@ class NavigationEnv(gym.Env):
         self.goal_info = info_cfg.goal_info
         self.position_info = info_cfg.position_info
         self.goal_grid = bool(info_cfg.goal_grid)
-        self.goal_dim, self.position_dim, self.goal_grid_dim = information_dims(cfg)
+        self.goal_dim, self.position_dim, self.goal_grid_dim, self.cue_dim = information_dims(cfg)
+        self.cue_info = info_cfg.get("cue_info", "none")
+        self.cue_interval = int(info_cfg.get("cue_interval", 1))
+        self.cue_phase = info_cfg.get("cue_phase", "start")
+        if self.cue_phase not in ("start", "random"):
+            raise ValueError(f"env.information.cue_phase must be start or random, got {self.cue_phase}")
+        # Step of the episode's first telling; stays 0 with cue_phase=start
+        self.cue_offset = torch.zeros(num_envs, dtype=torch.long, device=device)
+        if self.cue_info == "every" and self.cue_interval < 1:
+            raise ValueError(f"env.information.cue_interval must be >= 1, got {self.cue_interval}")
+        if self.cue_info == "every" and (self.goal_points is None or len(self.goal_points) > self.cue_dim):
+            raise ValueError(f"env.information.cue_info=every needs goal_mode=regions with at most {self.cue_dim} rooms")
         grid_cfg = info_cfg.grid
         self.grid_code = GridCode(modules=grid_cfg.modules, phases=grid_cfg.phases,
                                   min_spacing=grid_cfg.min_spacing, spacing_ratio=grid_cfg.spacing_ratio,
@@ -181,7 +193,7 @@ class NavigationEnv(gym.Env):
         self.integrated_pos  = self.agent_pos.clone()                                       # noisy path integration estimate
 
         base_proprio_dim = len(self._base_proprio())
-        proprio_dim = base_proprio_dim + self.goal_dim + self.position_dim + self.goal_grid_dim
+        proprio_dim = base_proprio_dim + self.goal_dim + self.position_dim + self.goal_grid_dim + self.cue_dim
 
         # Dict observation space: structured ray matrix + flat proprio vector
         self.observation_space = gym.spaces.Dict({
@@ -249,6 +261,10 @@ class NavigationEnv(gym.Env):
         self.last_seen_goal[mask] = 0.0
         self.frozen_goal[mask]    = 0.0
         self.integrated_pos[mask] = self.agent_pos[mask]
+        if self.cue_phase == "random":
+            # Drawn only in random mode, so start-phase runs keep their random stream
+            offset = torch.randint(0, self.cue_interval, (self.num_envs,), device=self.device)
+            self.cue_offset[mask] = offset[mask]
 
     def _reset_junction(self, mask: torch.Tensor):
         """Junction flag and shaping potential of every env in mask, after the agent positions are set."""
@@ -321,7 +337,8 @@ class NavigationEnv(gym.Env):
         self.last_speed        = action[:, 1]
         self.last_turning      = action[:, 0]
         self.goal_age         += 1.0
-        self.past_junction    |= self.in_junction()
+        # The box alone misses corner-cutting agents, which then kept a nonzero Φ in the rooms (fixed Nov 17)
+        self.past_junction    |= self.at_junction()
 
         intersections, distances, d_unit, wall_idx = self.ray_cast.scan(self.agent_pos, self.facing_direction)
         obs = self.get_observations(intersections, distances, d_unit, wall_idx)
@@ -376,6 +393,16 @@ class NavigationEnv(gym.Env):
             return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         x, y, b = self.agent_pos[:, 0], self.agent_pos[:, 1], self.junction_box
         return (x >= b[0]) & (x <= b[1]) & (y >= b[2]) & (y <= b[3])
+
+    def at_junction(self) -> torch.Tensor:
+        """
+        (E,) in the junction or past the corridor's end. The junction_region box is only as tall as the corridor, so an
+        agent turning early into an arm crosses the corner diagonally (up to max_speed per step) and can land beside the
+        box without ever being in it; past the end of the junction_path its distance is 0.
+        """
+        if self.junction_path is None:
+            return self.in_junction()
+        return self.in_junction() | (self.junction_distance() <= 0.0)
 
     def junction_distance(self, pos: torch.Tensor = None) -> torch.Tensor:
         """
@@ -492,7 +519,20 @@ class NavigationEnv(gym.Env):
         if self.goal_grid_dim:
             feats.append(self.grid_code(self.goal_pos) if self.goal_grid
                          else torch.zeros(self.num_envs, self.goal_grid_dim, dtype=torch.float32, device=self.device))
+        if self.cue_dim:
+            feats.append(self.cue_features())
         return feats
+
+    def cue_features(self) -> torch.Tensor:
+        """(E, cue_dim) one-hot of the cued room on every cue_interval-th step of the episode from step cue_offset on
+        (step 0 with cue_phase=start), zeros otherwise."""
+        cue = torch.zeros(self.num_envs, self.cue_dim, dtype=torch.float32, device=self.device)
+        if self.cue_info == "every":
+            told = ((self.steps - self.cue_offset) % self.cue_interval) == 0              # (E,), % is >= 0 in torch
+            cue[told, self.goal_idx[told]] = 1.0
+        elif self.cue_info != "reserved":
+            raise ValueError(f"Unknown cue_info {self.cue_info}")
+        return cue
 
     def _base_proprio(self) -> list:
         return [self.last_speed, self.last_turning]

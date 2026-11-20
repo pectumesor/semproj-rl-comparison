@@ -34,6 +34,7 @@ This turns the project from "which configuration wins" (a leaderboard, which rev
 | H5 | The hexagonal grid code is no better than random Fourier features of the same size on training rooms (consistent with Bartlett et al. 2022 after tuning). If it helps anywhere, it's on held-out layouts. | E3 (+ stretch) |
 | H6 | Perception, capacity, action and reward choices rank consistently from easy to hard rooms; memory and aux-loss choices don't | E4 |
 | H7 | Memory gain grows with a room's perceptual aliasing score and as the field of view narrows | E1a, E1b |
+| H8 | In the twin rooms, being told the cue replaces memory only as far as the gap between two tellings fits the agent's memory: the MLP solves only when told every step, FS16 when told at least every 16 steps, the LSTM at every rate. Being told the goal also replaces it; being told the position doesn't (added Nov 11, after E3 found no memory gap) | E3T |
 
 Negative outcomes are publishable too (ICBINB-style workshops reward them), as long as each test is clean.
 
@@ -123,6 +124,20 @@ Without these, later results aren't valid (details and line references in the ea
 Use a reduced design: global+fixed, off+fixed, off+random = 3 conditions × 2 backbones × 4 rooms × 5 seeds = 120 runs. If the budget is tight, drop medium_maze (90).
 **Output:** Figure 2 (left), "the MLP win comes from the place code". It also sets the base colour mode for everything after.
 
+**E1 result (120/120 runs, Nov 10, seeds 100–104; success AUC IQM [95% CI]).** The place-code explanation doesn't hold: switching the colour off doesn't hurt the MLP anywhere, and the MLP stays ahead of the LSTM in every condition. The aliasing score is near 0 in every room and colour mode (≤ 0.005) and spans too little to explain anything, so E1a can't support H7. No LSTM − MLP difference survives Holm at α = 0.01; the closest is medium_maze with colour on and a fixed goal (Holm p 0.046).
+
+| Room | Condition | MLP | LSTM |
+|---|---|---|---|
+| two_room, four_room | all three | 0.98–0.99 | 0.98–0.99 |
+| C_maze | global, fixed | 0.79 [0.62, 0.86] | 0.57 [0.09, 0.85] |
+| C_maze | off, fixed | 0.79 [0.64, 0.93] | 0.68 [0.39, 0.92] |
+| C_maze | off, random | 0.96 [0.95, 0.97] | 0.87 [0.72, 0.96] |
+| medium_maze | global, fixed | 0.67 [0.43, 0.86] | 0.12 [0.05, 0.19] |
+| medium_maze | off, fixed | 0.88 [0.57, 0.94] | 0.15 [0.08, 0.62] |
+| medium_maze | off, random | 0.56 [0.47, 0.62] | 0.23 [0.09, 0.55] |
+
+The two small rooms saturate. The MLP's lead in C_maze and medium_maze is in AUC, which also rewards learning speed, and the LSTM learns more slowly in these mazes (E4). So "the MLP win" doesn't depend on the colour place code. In C_maze both backbones end at the same success and the gap is learning speed. In medium_maze it's more than speed: 13 of 15 LSTM seeds end at or below 0.62 success within the budget, against 8 of 15 MLP seeds at or above 0.94, with graded rather than all-or-nothing failures. The gap shrinks from colour-on/fixed to colour-off/random (C_maze −0.24 → −0.10, medium_maze −0.54 → −0.27), but in medium_maze mostly because random goals make the MLP worse, and it never flips. The base colour mode for later experiments stays off. Per-seed tables and tests: `reports/E1 E3 results analysis.md`.
+
 **BPTT windows at equal updates (Nov 2026).** RecurrentPPO's update count fell with the window (128, 32, 8 updates per iteration at windows 16, 64, 256, against 512 for the MLP), so a window comparison also compared training budgets. From now on `algorithm.minibatch_size` is 1024 / window (64, 16, 4), which gives every window 128 updates of 1024 samples (`reports/Recurrent PPO BPTT implementations.md`). E2 uses these pairs. `scripts/e4_lstm_updates.sh` runs a learning-rate pilot on them and an MLP arm at 128 updates of 1024 samples. Stage 2's windows 64 and 256 stay in the paper as a labelled fixed-minibatch arm. The MLP keeps its tuned 512 updates of 256 samples as the reference.
 
 **Pilot result (37 runs, Nov 8; mean AUC, the pilot on screening seeds 0–2 and medium_maze only).** 1e-4 is the worst rate at every window (0.01–0.02). 3e-4 leads at window 16 (0.51, against 0.16 at 1e-3). At windows 64 and 256, 3e-4 and 1e-3 are within one seed of each other: 0.26 vs 0.35 and 0.12 vs 0.10, and window 64's 0.35 at 1e-3 rests on a single seed at 0.90. **Every window keeps the LSTM's 3e-4**, so E1–E3 and E2 run unchanged, and Stage 2's window 16 runs (64 envs × 16 = 1024 samples already) count as that window's equal-update arm. At equal updates the longer windows still trail window 16 here (0.51 / 0.26 / 0.12), and the confirmation runs (windows 64 and 256 at 3e-4, seeds 100–104, both rooms) test that on the Stage 2 seeds. MLP arm, 128 updates of 1024 samples at 2e-4 against the tuned MLP on the same seeds 100–104: hard_maze 0.60 vs 0.27 (better on all 5 seeds), medium_maze 0.42 vs 0.55 (worse on 4 of 5). The MLP's AUC depends on its update scheme in opposite directions per room, so any LSTM vs MLP claim names the MLP's update scheme.
@@ -135,6 +150,17 @@ Use a reduced design: global+fixed, off+fixed, off+random = 3 conditions × 2 ba
 
 **E1b: Field of view as a perception dial (about 40 runs).** FOV {90°, 180°, 270°, 360°} × {MLP, LSTM} × C_maze × 5 seeds. LSTM is used because it's the existing, tested backbone. Swap in GRU only if E2 shows it clearly better. Narrowing the view should increase the memory gain. The result is a single crossover plot, and it reuses E4 Theme A's FOV levels.
 
+**E1b result (40/40 runs, Nov 10, C_maze, colour off, random goals; AUC IQM [95% CI]).** Narrowing the view doesn't create a memory gain: at 90° the LSTM falls further than the MLP.
+
+| FOV | MLP | LSTM |
+|---|---|---|
+| 90° | 0.81 [0.73, 0.89] | 0.47 [0.08, 0.84] |
+| 180° | 0.96 [0.95, 0.97] | 0.87 [0.74, 0.96] |
+| 270° | 0.92 [0.76, 0.96] | 0.94 [0.89, 0.95] |
+| 360° | 0.83 [0.59, 0.95] | 0.46 [0.10, 0.84] |
+
+The LSTM matches the MLP only at 270°, where the CIs overlap. Its intervals at 90° and 360° span most of the range, so a few LSTM seeds failed there. The 180° row reproduces E1's C_maze off/random cell exactly, for both backbones (same config and seeds; training is deterministic on CPU).
+
 ### E2: Twin rooms with a cue ("remember") — about 175 runs. Headline experiment.
 
 **Layout:** a start alcove with a **cue patch** (one of two colours, always at the same spot) → a corridor of length *L* → a junction → **two geometrically identical rooms with identical hard-coded wall colours**. The goal is placed in one room at random each episode, and the cue colour says which.
@@ -143,6 +169,7 @@ Use a reduced design: global+fixed, off+fixed, off+random = 3 conditions × 2 ba
 - The cue isn't visible past the start either. The alcove sits above a short shaft that bends 90° into the corridor. In the first layout the corridor was straight, and the edge ray of a 180° FOV saw the cue's back wall from the junction, so a memoryless agent could re-read it. `tests/test_experiment_features.py::test_twin_rooms_cue_hidden_past_the_bend` checks this with 360° rays.
 - Shaping toward the junction (`env.junction_shaping=1.0`, needed since the pilot, see below): F = γΦ(s′) − Φ(s) with Φ = −d_J / d_J(start), d_J the path distance to the junction along the room's `junction_path`, and Φ = 0 from the first step in the junction on. Both rooms lie past the junction, so it carries nothing about which room is right; being potential-based it leaves the optimal policy and the memoryless 0.5 ceiling unchanged (Ng et al. 1999), and it keeps credit assignment short (Ni et al. 2023). In the straight corridor d_J ignores the lateral offset. Standing still earns (1 − γ)|Φ| ≤ 0.001 per step, below the 1/(2L + 256) step penalty at every L. AUC and learning speed then describe the shaped task, and the paper says so.
 - Generate one JSON per *L*; the geometry is otherwise fixed.
+- Encoder: the MLP encoder of the shared base config, not E4's CNN (decided Nov 10). E2 varies only the backbone, perception is easy in the grey twin rooms, a CNN run costs about 3×, and CNN + LSTM is untuned (0.62 in Stage 2). The paper lists "memory result not checked on the CNN encoder" as a limitation.
 
 | Factor | Levels |
 |---|---|
@@ -151,6 +178,28 @@ Use a reduced design: global+fixed, off+fixed, off+random = 3 conditions × 2 ba
 | Seeds | 5 (seeds 100–104) |
 
 7 × 5 × 5 = **175 runs** (small rooms, so cheap). Optional: K = 4 rooms at *L* ∈ {32, 128} for the 3 best backbones (+30).
+
+**K = 4 rooms (designed and launched Nov 18, `scripts/e2_k4.sh`, launcher job 21368615, group `e2_twin_rooms_k4`, 30 runs).**
+- **Layout** (`generate_twin_rooms.py --rooms 4`, `rooms/twin_rooms_K4_L{32,128}.json`): the start, corridor, first junction, `junction_region` and `junction_path` are E2's. Each arm (120 units, so the upper-left room clears the corridor's wall by 50) ends in a cross corridor with an identical baffled room at both ends. The cue walls show red, blue, green or yellow for the upper-left, upper-right, lower-left or lower-right room.
+- **What changes for the agent:** a memoryless policy sits at 0.25, the recurrent state has to keep two bits instead of one, and the second choice comes about 12 steps after the first junction. The shaping still ends at the first junction, so it says nothing about the room.
+- **Tests:** `test_twin_rooms_k4` checks that the four rooms are identical and equally far from the junction, that the cue is hidden from every reachable point past the bend (360° rays), and that the one-hot telling and wrong-room termination work. L = 8 can't take 4 rooms (the upper-left room would overlap the alcove); the generator raises.
+- **Backbones:** E2's three best by solved seeds over L = 8–256: LSTM-BPTT256 (19/25), GRU-BPTT64 (18/25) and LSTM-BPTT64 (14/25, ahead of BPTT16 at 13/25). No memoryless backbone: E2 has them at chance from L = 32 on.
+- **Settings and outputs:** seeds 100–104 and E2's settings (2L + 256 steps, γ = 0.999, shaping 1.0, the E2 window/minibatch pairs). The sweep then runs the E2 diagnostics with 1000 episodes, `evaluate_metrics.py` and `seed_stats.py` (every pair per L). E2's K = 2 seeds at the same L are the reference.
+- **Reading:** if a backbone solves K = 2 but not K = 4 at the same L, its memory holds one bit but not two over that distance. At L = 128 (K = 2: BPTT256 and GRU 4/5, BPTT64 1/5) this is the case to watch.
+
+**K = 4 result (30/30 runs, Nov 19; launcher 21368615 finished, every run COMPLETED with auc.npy and a plausible run time of 2:20–10:20 h, no errors in the launcher log; E2 diagnostics with 1000 deterministic episodes per seed from `best.pt`, stats `stats/20261118095532.json`).** Cells: solved seeds (success ≥ 0.9) [success range], then AUC IQM [95% CI]; K = 2 is E2 at the same L.
+
+| Backbone | L = 32, K = 4 | AUC | K = 2 | L = 128, K = 4 | AUC | K = 2 |
+|---|---|---|---|---|---|---|
+| GRU-BPTT64 | 4/5 [0.51–0.99] | 0.57 [0.41, 0.66] | 5/5 | 0/5 [0.23–0.52] | 0.13 [0.07, 0.31] | 4/5 |
+| LSTM-BPTT256 | 3/5 [0.26–1.00] | 0.49 [0.22, 0.76] | 5/5 | 0/5 [0.24–0.54] | 0.18 [0.10, 0.25] | 4/5 |
+| LSTM-BPTT64 | 0/5 [0.25–0.75] | 0.25 [0.17, 0.44] | 5/5 | 0/5 [0.23–0.26] | 0.19 [0.11, 0.21] | 1/5 |
+
+- **Two bits cost a lot at L = 32 and everything at L = 128.** 7 of 30 seeds solve, against 24 of 30 with two rooms. No pairwise difference survives Welch + Holm at α = 0.01 (closest: GRU vs LSTM-BPTT64 at L = 32, AUC p = 0.016, p_holm = 0.093). The order at L = 32 is the K = 2 order (GRU ≈ BPTT256 > BPTT64).
+- **The memory sits in the recurrent state wherever it is used.** Every solved seed fails the swap (other cue's recurrent state: 0.00–0.09) and loses 0.42–0.61 to the junction reset. Solved seeds get both bits right (0.92–1.00 each).
+- **The failures are not "one bit but not two".** 18 of the 23 unsolved seeds sit at chance (0.23–0.30). They go to one or two fixed rooms whatever the cue: 17 of the 30 seeds use only one or two rooms (each > 5% of episodes). Their swap equals their success, so the state carries no cue. Only five seeds carry part of it (0.51–0.75: GRU 103 and LSTM-BPTT64 102 and 104 at L = 32, GRU 101 and LSTM-BPTT256 103 at L = 128). GRU 103, for example, never enters an upper room but tells lower-left from the rest. So at L = 128 the backbones that hold one bit with two rooms learn none with four. That is a learning failure (a 25% reward signal for a 4-way choice made L + 12 steps after the cue), not a capacity limit, which this design can't separate.
+- **The budget binds for the partial seeds.** Their success was still rising when the 1000 iterations ran out (LSTM-BPTT256 L = 128 seed 103: last-10-eval mean 0.29 → 0.34 → 0.54 over the last three quarters; LSTM-BPTT64 L = 32 seed 102: 0.45 → 0.59). The chance-level seeds were flat for the whole run. Several chance seeds at L = 128 end with eval success near 0 (timeouts); the diagnostics use `best.pt`, so the table shows their best checkpoint.
+- **Status:** optional and not pre-registered, so reported as an exploratory extension of E2. For the paper: one sentence and the table in the appendix ("two bits are learned at L = 32 by GRU and LSTM-BPTT256, at L = 128 by neither within the budget"). A longer budget or a shaped second junction would be the follow-up if a reviewer asks; neither is planned.
 
 **Checks that memory is actually used** (cheap, run on saved checkpoints):
 1. **Reset at the junction:** zero the hidden state when the agent enters the junction. Success should drop to 0.5.
@@ -178,6 +227,78 @@ All six are implemented in `scripts/e2_diagnostics.py` (1000 episodes per condit
 - Fix before the full sweep: the junction shaping above, so every backbone reaches the choice. Acceptance test on a new shaped L = 32 pilot: every seed of every backbone reaches the junction, and memoryless seeds land at 0.43–0.57, none above. The unshaped pilot stays as the reference row. Literature and alternatives: `reports/Twin room exploration failure fixes.md` and `reports/Twin room memory fix and tests.md`.
 - Checks 4–6 on two of the unshaped pilot's LSTM-BPTT16 checkpoints (200 episodes each): seed 101, which the junction reset didn't affect, and seed 102, which it did. Both give the same answer: a reset anywhere in the corridor drops success to chance (0.54), the mirrored pose leaves it at 1.00, the other cue's recurrent state sends the agent to the wrong room (success 0.00), the other cue's pose doesn't (1.00), and the same-cue swap does no harm (1.00). The cue is carried in the recurrent state, not the body. The junction reset most likely missed it on seed 101 because the turn into the arm is already under way when the agent enters the junction box.
 
+**Shaped pilot result (L = 32, `env.junction_shaping=1.0`, timestamp 20261110_145407, 35/35 runs, Nov 11; diagnostics on 1000 deterministic episodes per seed).** The shaping removes the exploration lottery: every seed of every backbone reaches the junction (0.96–1.00 of episodes).
+
+| Backbone | Success per seed (100–104) | Success AUC per seed | Where the cue is kept |
+|---|---|---|---|
+| MLP | 0.47, 0.50, 0.40, 0.47, 0.49 | 0.36–0.43 | nowhere: chance, mirror changes nothing |
+| FS4 | 0.49, 0.49, 0.50, 0.48, 0.51 | 0.16–0.35 | nowhere: chance |
+| FS16 | **0.99**, 0.50, 0.50, **1.00**, 0.64 | 0.46–0.53 | **in the body** on seeds 100 and 103 (see below) |
+| LSTM-BPTT16 | 0.98, 0.99, 1.00, 1.00, 0.95 | 0.66–0.92 | recurrent state, 5/5 seeds |
+| LSTM-BPTT64 | 1.00, 0.99, 1.00, 1.00, 1.00 | 0.89–0.93 | recurrent state, 5/5 |
+| LSTM-BPTT256 | 0.98, 0.99, 0.99, 1.00, 1.00 | 0.75–0.93 | recurrent state, 5/5 |
+| GRU | 0.99, 0.96, 1.00, 1.00, 1.00 | 0.92–0.93 | recurrent state, 5/5 |
+
+- All 20 recurrent seeds pass the swap: the other cue's recurrent state sends them to the wrong room (success 0.00–0.04), the other cue's pose doesn't (0.96–1.00), and the same-cue swap does no harm (0.96–1.00). A reset anywhere in the corridor drops most of them to chance. A few seeds lose a little to the mirrored pose (LSTM-BPTT16 seed 104: 0.95 → 0.81, LSTM-BPTT64 seeds 103 and 104: → 0.87 and 0.93), so a small part of the choice sits in the pose there.
+- **FS16 leaks the cue through the body.** At L = 32 the cue was last seen 33–34 steps before the junction, twice the 16-frame window. FS16 seed 100 holds it in its lateral offset in the corridor (+11.6 for one cue, −13.4 for the other, sd ≈ 5; the sign alone decodes the cue at 0.99), seed 103 in the size of the offset (+15.7 vs +24.5, sd 1–3). The non-solving seed 101 drives the same line for both cues (+25.9 vs +27.0). The frames show the cue long enough to steer to one side, and keeping to that side is reactive, so the bit survives any corridor length. The mirror test can't run on a frame stack (its older frames would still show the old pose), so this comes from a pose probe on 1000 episodes (scratch script `fs_pose_probe.py`), not from `e2_diagnostics.py`.
+- Acceptance test: passed for the MLP and FS4 (MLP seed 102 sits at 0.40 because 17% of its episodes time out, not because of a leak), failed for FS16.
+- Decision (Nov 11): the room stays as it is, and FS16's body memory is reported as a finding: a 16-frame window plus the body bridges a gap twice the window. Hardening the corridor (a neck) would only move the bit to another channel, e.g. the last speed and turn in the proprio. `e2_diagnostics.py` now runs a pose probe on every backbone (cue decoded from lateral offset, heading and last action halfway down the corridor; FS16 seed 100: accuracy 1.00, offsets +11.6 / −13.4), so Figure 3's FS rows can say which seeds solve by body memory. The full sweep (L = 8, 64, 128, 256, 140 runs) shares the pilot's timestamp 20261110145407, and the L = 32 diagnostics were rerun with the probe.
+- Pose probe at L = 32 (accuracy on held-out episodes): MLP 0.46–0.57 and FS4 0.49–0.59, at chance. FS16 0.87–1.00 on every seed, including the two at chance success (0.87 each), so FS16 always steers by the cue but only seeds 100 and 103 turn it into the room choice. The recurrent agents score 0.59–1.00 too, although the swap shows their choice follows the recurrent state and not the pose. **The probe shows that the body carries the cue, not that the choice uses it.** For the recurrent agents the swap decides. For FS16 the argument is by elimination: the cue is 33 steps old at the junction, twice the stack, so a choice above chance can only come from the body, and the probe says it's the lateral offset.
+
+**Full sweep, interim (Nov 12, same timestamp, 138/140 runs; no hidden failures; diagnostics not run yet).** Final eval success per seed (100–104), from the training curve; AUC ranges in brackets. L = 256 still runs one seed each of LSTM-BPTT256 and FS16.
+
+| Backbone | L = 8 | L = 64 | L = 128 | L = 256 (so far) |
+|---|---|---|---|---|
+| MLP | 0.68–0.96 [0.50–0.78] | 0.00–0.52 [0.29–0.37] | 0.10–0.32 [0.25–0.36] | 0.04–0.54 [0.07–0.33] |
+| FS4 | 0.92–1.00 [0.70–0.89] | 0.00–0.24 [0.23–0.40] | 0.00–0.22 [0.13–0.26] | 0.00–0.04 [0.03–0.20] |
+| FS16 | 0.98–1.00 [0.91–0.96] | 0.00–0.58 [0.25–0.42] | 0.10–0.42 [0.21–0.29] | 0.00–0.44 [0.10–0.33] (4 seeds) |
+| LSTM-BPTT16 | 0.98–1.00 [0.93–0.96] | 0.40–0.96, 2/5 solved [0.47–0.63] | 0.10–0.46 [0.28–0.45] | 0.00–0.42 [0.13–0.29] |
+| LSTM-BPTT64 | 1.00 [0.96–0.98] | 0.48–1.00, 3/5 [0.47–0.80] | 0.44–0.96 [0.42–0.59] | 0.00–0.20 [0.07–0.24] |
+| LSTM-BPTT256 | 0.92–1.00 [0.88–0.98] | 0.96–1.00, 5/5 [0.75–0.90] | 0.54–1.00, 4/5 [0.44–0.84] | 0.10–0.56 [0.24–0.42] (4 seeds) |
+| GRU (BPTT64) | 1.00 [0.95–0.97] | 0.48–1.00, 4/5 [0.48–0.87] | 0.58–1.00, 4/5 [0.34–0.80] | 0.00–0.54 [0.18–0.39] |
+
+- L = 8 needs no memory to speak of: the MLP solves 3/5 seeds and both frame stacks solve all five. The memory gap opens at L = 32 and the memoryless backbones stay at or below chance from there on.
+- Past L = 32 the BPTT window decides: BPTT16 drops to 2/5 solved at L = 64, BPTT256 keeps 5/5 at 64 and 4/5 at 128. GRU at window 64 does better than LSTM at window 64 at L = 128 (4/5 vs 1/5).
+- At L = 256 no backbone solves a seed, window 256 included (the cue is about 257 steps old at the junction, just past the window). The diagnostics below show every seed reaches the junction, so this is memory, not exploration.
+- E3T's L (pre-registered rule): LSTM-BPTT16 solves 2 of 5 seeds at L = 64, fewer than 4, so **E3T runs at L = 32**. Launched Nov 12 (launcher job 20652606). On the diagnostics' 1000 episodes it's 3 of 5 (0.97, 0.92, 0.94), still fewer than 4, so the decision stands.
+
+**Full sweep diagnostics (Nov 13, all L, 175 seeds, junction fix applied, launcher 20758847, 30 jobs, no hidden failures; 1000 deterministic episodes per seed; "solved" = success ≥ 0.9).** Reset sweep and reset at the junction are over the solved recurrent seeds only.
+
+| Backbone | L = 8 | L = 32 | L = 64 | L = 128 | L = 256 |
+|---|---|---|---|---|---|
+| MLP | 3/5 (0.64–0.98) | 0/5 | 0/5 | 0/5 | 0/5 |
+| FS4 | 5/5 | 0/5 | 0/5 | 0/5 | 0/5 |
+| FS16 | 5/5 | 2/5 (body) | 0/5 | 0/5 | 0/5 |
+| LSTM-BPTT16 | 5/5 | 5/5 | 3/5 | 0/5 | 0/5 |
+| LSTM-BPTT64 | 5/5 | 5/5 | 3/5 (+0.80) | 1/5 (+0.64, 0.74) | 0/5 |
+| LSTM-BPTT256 | 5/5 | 5/5 | 5/5 | 4/5 | 0/5 |
+| GRU (BPTT64) | 5/5 | 5/5 | 4/5 | 4/5 | 0/5 (0.83, 0.74 partial) |
+| Junction reach (min over seeds) | 0.97 | 0.99 | 0.99 | 0.97 | 0.90 |
+
+- **Every seed reaches the junction** (0.90–1.00 of episodes; the lowest are L = 256 LSTM seeds at 0.90–0.92 with 12–22% timeouts). Every failure in the table is a memory failure, not an exploration failure: the unsolved seeds sit at chance (0.38–0.56) and choose one room, or part way (0.64–0.83, eight seeds). Exception: five memoryless seeds at L ≥ 128 drop to 0.17–0.34 because 27–51% of their episodes time out.
+- **All 64 solved recurrent seeds pass the swap** (other cue's recurrent state: success 0.00–0.07; other cue's pose: 0.93–1.00; mirror: 0.72–1.00). The partial seeds behave the same way in proportion (L = 128 LSTM-BPTT64 seed 104: success 0.74, hidden_other 0.25), so the room choice follows the recurrent state at every L.
+- **Reset sweep:** zeroing the state anywhere from 0 to 75% of the corridor drops the solved seeds to chance (median 0.50 at every L and fraction). A reset on reaching the junction costs much less (median 0.93 / 0.81 / 0.80 / 0.65 at L = 8 / 32 / 64 / 128; range 0.35–1.00): by the junction the choice is mostly already committed in the heading. Figure 3's memory-location panel uses the 50% reset, not the junction reset.
+- **Pose probe:** memoryless backbones at chance from L = 32 on (0.45–0.67), FS16 0.87–1.00 only at L = 32 (the body-memory seeds); at L ≥ 64 FS16 is 0.45–0.67 and never solves. So FS16's body memory reaches L = 32 but not L = 64.
+- **L = 8 MLP** solves 3/5 by the body (pose probe 0.97–1.00 on those seeds, mirror sends seed 100 to 0.04): at L = 8 the cue is close enough to the junction to steer by.
+- The training-curve interim table above and these 1000-episode numbers agree on every solved count except LSTM-BPTT16 at L = 64 (2/5 → 3/5) and BPTT64 at L = 128 (count unchanged, 1/5). Figure 3 and Table 1 use the diagnostics.
+
+**Junction counting bug (found Nov 13, fixed in the diagnostics; E2 rerun done, see the table above).** The `junction_region` box is only as tall as the corridor, so an agent turning early into an arm crosses the corner diagonally (up to 13 units per step) and lands beside the box without being in it. The diagnostics counted the junction by the box alone: L = 8 MLP seed 103 entered a room in 996 episodes, 181 of them never "reached the junction". Two numbers were affected: `reached_junction` (undercounted, so the earlier "every seed reaches the junction" stays true) and `reset_at_junction` (corner-cutting episodes were never reset but counted, which inflates success after the reset). Fix in `scripts/e2_diagnostics.py`: `at_junction()` also counts any point past the corridor's end, and the reset result is over the reset episodes only, with the drop on the same episodes. The swaps, mirror and pose probe act at corridor fraction 0.5 and were never affected. All E2 diagnostics (pilot included) and the layer check's rerun with the fix (launchers 20758847, 20758849); E3T's run after its training, with the fix.
+- The same box sets the training shaping's `past_junction` latch, so corner-cutting episodes keep a nonzero Φ past the junction. The shaping still telescopes (terminal Φ = 0), so the optimal policy is unchanged, but these episodes get a shaping penalty in the rooms that the end refunds. Not changed while E3T trains (it would split its seeds); fix the latch the same way before any new twin-room training. Done Nov 17 for E3T at L = 64 (`NavigationEnv.at_junction`).
+
+**Layer check (launched Nov 12, launcher job 20655668, 10 runs).** Every recurrent run so far has 2 stacked layers of 64 units (`backbone.lstm_num_layers: 2`). Mirowski et al. 2017 stack two LSTMs, but the second also gets the velocity, last action and a skip of the observation features, and their gains came mostly from the auxiliary losses. Banino et al. 2018 use one supervised path-integration LSTM feeding a separate policy LSTM, not a deeper RL LSTM. Layers stack per step and don't lengthen the gradient path in time, so the prediction is that depth doesn't move the BPTT-16 failure. `scripts/e2_lstm_layers.sh`: LSTM-BPTT16 with 1 and 3 layers at L = 64, seeds 100–104, the E2 diagnostics on both, own timestamp; E2's 2-layer seeds (2/5 solved) are the reference. The storage name gains `_layers:N` only when it isn't 2, so earlier folders keep their names. Depth also changes the parameter count; report it next to the result. Not a pre-registered hypothesis: an exploratory check, reported as such.
+
+**Layer check result (10/10 runs, Nov 13, timestamp 20261112142837, no hidden failures).** Final eval success per seed (100–104), AUC range in brackets:
+
+| LSTM-BPTT16 at L = 64 | Final success | Solved (≥ 0.9) | AUC |
+|---|---|---|---|
+| 1 layer | 0.44, 1.00, 0.94, 1.00, 0.54 | 3/5 | 0.43–0.82 |
+| 2 layers (E2 reference) | 0.52, 0.96, 0.58, 0.40, 0.92 | 2/5 | 0.47–0.63 |
+| 3 layers | 0.64, 0.98, 0.48, 0.54, 0.42 | 1/5 | 0.47–0.81 |
+
+As predicted, depth doesn't fix the window-16 failure: every layer count leaves seeds at chance, and the spread is within what 5 seeds can show. In E2, window 256 at the same 2 layers solves 5/5 here. The 2 layers stay.
+
+Diagnostics (Nov 14, 1000 deterministic episodes per seed, junction fix applied): 1 layer solves 4/5 (0.90–1.00, seed 100 at 0.51), 2 layers 3/5 (E2's diagnostics), 3 layers 2/5 (0.99, 1.00; two partial at 0.66 and 0.71, one at 0.50). Every seed reaches the junction, and every solved seed passes the swap (other cue's recurrent state: 0.00–0.10), so the cue sits in the recurrent state at every depth. The order 1 > 2 > 3 is within 5-seed noise; if anything depth makes the window-16 problem a little worse, not better.
+
 **Output:** Figure 3, success vs *L* (log axis) per backbone, a 0.5 chance line, and vertical marks at 4 and 16 frames. Inset: BPTT window × *L* heatmap. Diagnostics go in a small table.
 
 ### E3: Information sources ("be told") — about 180 runs
@@ -201,6 +322,133 @@ Goal randomised per episode in all conditions. The input size is the same in eve
 **Output:** Figure 4, a heatmap of conditions × backbones of IQM padded AUC, one panel per layout, plus the "memory gain" row (best recurrent − MLP) for each condition. This is the direct test of "information substitutes for memory".
 
 **Why this is cheap:** grid and Fourier features are a few cosines per step, vectorised in torch. No supervised grid network has to be trained, which avoids the runtime cost of reproducing Banino's.
+
+**E3 result (180/180 runs, Nov 11, no hidden failures; full tables in `reports/E1 E3 results analysis.md`).** E3 as run can't test "information substitutes for memory": with nothing extra, both backbones already reach 0.93–0.99 AUC in four_room and C_maze, so there's no memory gap to close (H3 untestable). four_room saturates in every condition. In C_maze:
+- The oracle goal hurts the LSTM (IQM 0.52 [0.13, 0.82] vs 0.94 at I0; seeds 102 and 103 fail), while the MLP with it paths best (SPL 0.61–0.76). Cause unknown; the goal slot is normalised, so it isn't input scale.
+- H4 not supported: frozen last-seen goal and noisy grid code are where the LSTM trails most (−0.12, −0.16), none significant.
+- H5 holds as a null result: grid code no better than Fourier features of the same size.
+- No LSTM − MLP difference survives Holm.
+The information question needs a layout where memory matters (the twin rooms are the candidate), not more runs in these two.
+
+### E3T: Told or remembered, in the twin rooms — 105 runs (designed and implemented Nov 11, launched Nov 12 at L = 32)
+
+E3's rooms need no memory, so "information substitutes for memory" moves to the one task where memory is required and verified: the shaped twin rooms of E2, where every recurrent seed keeps the cue in its recurrent state and memoryless agents sit at 0.5. The question becomes "how often does the agent have to be told the cue so that it no longer needs to remember it?"
+
+**Setting:** E2's room and settings (`env.junction_shaping=1.0`, colour off, goal regions, 2L + 256 steps, gamma 0.999) at one corridor length. **L = 64** (the cue is about 65 steps old at the junction, four times FS16's window), **unless** E2 shows LSTM-BPTT16 solving fewer than 4 of 5 seeds at L = 64; then L = 32. `env.information.reserve_info_slots=true` in every condition, so all conditions share one input size (as in E3).
+
+| Condition | Agent receives, in the proprio | Prediction (MLP / FS16 / LSTM) |
+|---|---|---|
+| I0 | nothing extra | 0.5 / ≤ 0.5 or body memory / ~1 |
+| C1 | the cue (one-hot over the rooms) every step: the environment does all the remembering | ~1 / ~1 / ~1 |
+| C4 | the cue every 4th step, zeros otherwise | ~0.5–0.6 (only when a telling falls at the decision) / ~1 / ~1 |
+| C16 | every 16th step | ~0.5 / ~1 (a telling is always in the window) / ~1 |
+| C64 | every 64th step (about once in the corridor) | ~0.5 / ~0.5 / ~1 |
+| G1 | the oracle goal (E3's goal slot: distance and bearing through walls) | ~1 / ~1 / ~1 |
+| P1 | raw normalised (x, y) | 0.5 / as I0 / ~1. Carries no cue, but makes the lateral offset readable, so it's also the test whether being told the position helps body memory |
+
+E3's G2a/G2b are left out: the goal is behind the baffle and never seen before the choice, so they equal I0 for the decision. P2–P5 add nothing to P1 here, since position carries no cue.
+
+7 conditions × {MLP, FS16, LSTM-BPTT16} × 5 seeds (100–104) = **105 runs**, about 3.5 h each (shaped L = 32 pilot runs took 3.4–3.7 h), so roughly 370 CPU-hours. GRU, FS4 and the other windows stay out: E2 already covers them, and FS16 is the one whose window the tellings cross. The backbones use the E2 learning rates (MLP and FS16 1e-4, LSTM 3e-4).
+
+**Checks and output:** the E2 diagnostics on every seed (the swap and the reset sweep for the LSTM, the pose probe for all), so a C64 success can be attributed to memory and not to the body. Figure: success vs telling interval (1, 4, 16, 64, ∞ = I0) per backbone with a 0.5 chance line and a mark at 16 frames, plus G1 and P1 as separate points. H8 holds if the MLP falls to chance as soon as the interval exceeds 1, FS16 between 16 and 64, and the LSTM stays up throughout.
+
+**Implementation (done Nov 11):**
+1. `env.information.cue_info: none | reserved | every` with `cue_interval`: a 4-wide slot (one-hot of the cued room) on every `cue_interval`-th step of the episode, step 0 included, zeros otherwise. `reserved` keeps the slot at zeros, so I0, G1 and P1 have the input size of the C conditions. The cue slot has its own switch rather than following `reserve_info_slots`, so earlier runs keep their input size.
+2. Storage suffix `_cue:<N>` (told every N steps, 0 = never), W&B tag `cue_info:`. With the goal slots the storage name reaches about 245 bytes of the 255 a folder name allows, so `run_names` now refuses names over 255 bytes up front (an LSTM + oracle smoke run hit the limit with the longer first spelling).
+3. `scripts/e3_twin_rooms.sh` (`E3T_L=64` by default): 12 multiruns, the E2 diagnostics on every config, `seed_stats.py` with LSTM vs MLP per condition, and `paper_figures.py +figure.name=e3t` (success vs telling interval, plus `table_e3t.csv` with the diagnostics per condition).
+4. Tests in `tests/test_experiment_features.py` (slot timing and width, storage names and conditions, the figure on fake seeds); smoke runs for MLP, FS16 and LSTM in every kind of condition, and the diagnostics on two of them.
+
+**E3T result (105/105 runs, Nov 14, timestamp 20261112133519, no hidden failures; diagnostics on 1000 deterministic episodes per seed with the junction fix).** Seeds solved (success ≥ 0.9) of 5, success range in brackets, IQM success AUC with 95% CI below.
+
+| Backbone | C1 | C4 | C16 | C64 | I0 | G1 | P1 |
+|---|---|---|---|---|---|---|---|
+| MLP | 5/5 [0.97–0.99] | 5/5 [0.91–0.99] | 0/5 [0.47–0.78] | 0/5 [0.48–0.66] | 0/5 [0.43–0.49] | 5/5 [1.00] | 0/5 [0.50–0.52] |
+| AUC | 0.91 [0.85, 0.94] | 0.72 [0.66, 0.78] | 0.50 [0.44, 0.53] | 0.43 [0.42, 0.46] | 0.34 [0.27, 0.42] | 0.98 [0.97, 0.99] | 0.46 [0.42, 0.48] |
+| FS16 | 5/5 [0.99–1.00] | 5/5 [0.99–1.00] | 4/5 (seed 104 never reaches the junction) | 4/5 (seed 101 at 0.50) | 0/5 [0.47–0.68] | 5/5 [0.98–1.00] | 2/5 [0.49–0.99] |
+| AUC | 0.92 [0.88, 0.94] | 0.92 [0.87, 0.93] | 0.84 [0.25, 0.92] | 0.69 [0.53, 0.78] | 0.47 [0.44, 0.48] | 0.97 [0.96, 0.98] | 0.49 [0.47, 0.58] |
+| LSTM-BPTT16 | 5/5 [0.98–1.00] | 5/5 [0.96–1.00] | 5/5 [0.98–0.99] | 5/5 [0.95–0.99] | 5/5 [0.97–0.99] | 5/5 [0.99–1.00] | 3/5 (0.87; seed 101 times out on every episode) |
+| AUC | 0.90 [0.81, 0.95] | 0.90 [0.81, 0.93] | 0.83 [0.79, 0.88] | 0.83 [0.81, 0.87] | 0.78 [0.71, 0.84] | 0.98 [0.97, 0.98] | 0.78 [0.20, 0.90] |
+
+Every seed reaches the junction except FS16 C16 seed 104 (0.00). LSTM vs MLP (AUC, Welch + Holm at α = 0.01): significant at I0 (+0.44) and C16 (+0.34), not at C1 (−0.01).
+
+**H8 holds for the LSTM and the told goal; the MLP beats it at C4 by bridging the gaps with the body; C64 is confounded by when the telling lands (timing check below):**
+- **MLP** solves told every 4th step, not only every step (H8 predicted chance at C4). The pose probe at C4 is 0.70–1.00: between tellings it keeps steering to the cued side, so the bit lives in its pose for the 3 blank steps (the same body memory as FS16 in E2). It falls to near chance at C16 (pose probe 0.70–0.94, so it still steers by the cue but loses it before the choice) and C64.
+- **FS16** solves C64 on 4/5 seeds (H8 predicted chance), with pose probe 0.74–0.98 on the solvers. The timing check below shows this is not body memory: it reads the step-64 telling after the junction.
+- **LSTM** solves every interval, as predicted. The swap shows which ones use memory: at C4, C16 and I0 the other cue's recurrent state sends it to the wrong room (0.00–0.23), so the recurrent state holds the cue between tellings. At C1 four of five seeds ignore the swap (0.96–1.00): told every step, they read the slot and don't remember. **At C64 three of five seeds also ignore it (0.97–0.99)**, so they see a telling after the swap point (corridor 50%). With a deterministic policy the agent can time its walk so a telling lands near the junction; the timing check below confirms it: only seeds 103 and 104 remember.
+- **G1** (told the goal): every backbone solves, and the LSTM ignores the swap (0.89–1.00): it doesn't remember the cue when it's told the goal.
+- **P1** (told the position): the MLP stays at chance, as predicted. FS16 solves 2/5 vs 0/5 at I0, weak support for "position makes the lateral offset readable". P1 costs the LSTM two seeds (one at 0.87, one times out on every episode), like the oracle goal did in E3's C_maze: an extra input that carries nothing for the task destabilises some LSTM seeds.
+
+**C64 timing check (Nov 15, scratch script `c64_timing.py`, 1000 episodes per seed, three runs on the same episodes: normal, cue slot zeroed from the bend on, zeroed from corridor fraction 0.5 on).** At L = 32 the agents reach the junction 50–79 steps into the episode (median per seed), so the second telling (step 64) lands at the decision. C64 doesn't test memory as designed.
+
+| Backbone, interval | Success | Blinded from the bend | Blinded from 50% | Junction step (median per seed) | Reading |
+|---|---|---|---|---|---|
+| LSTM, C4 | 0.96–1.00 | 0.89–1.00 | 0.92–1.00 | 61–79 | memory, 5/5 |
+| LSTM, C16 | 0.98–1.00 | 0.97–1.00 | 0.98–1.00 | 63–71 | memory, 5/5 |
+| LSTM, C64 | 0.95–0.99 | 0.50–0.51 (seeds 100–102), 0.99 / 0.95 (103, 104) | same | 60–73 | memory 2/5, late telling 3/5 |
+| MLP, C4 | 0.91–0.99 | 0.42–0.50 | 0.36–0.50 | 54–59 | needs the tellings in the corridor |
+| MLP, C16 | 0.47–0.78 | 0.07–0.51 | 0.10–0.50 | 53–60 | chance |
+| MLP, C64 | 0.48–0.66 | 0.22–0.50 | 0.46–0.50 | 56–67 | chance |
+| FS16, C16 (4 seeds) | 1.00 | 0.45–0.54 | 0.50–0.87 | 49–54 | needs the tellings in the corridor |
+| FS16, C64 (4 solvers) | 0.99–1.00 | 0.42–0.50 | 0.42–0.50 | 50–59 | reads the step-64 telling after the junction (no telling after 50% in 98–100% of episodes) |
+
+- The LSTM keeps the cue between tellings at C4 and C16; at C64 seeds 100–102 wait for the late telling (seed 100 reaches the junction at step ~60 and reads step 64 just after it), only 103 and 104 remember.
+- The MLP's C4 success needs the tellings in the corridor: steering bridges the 3 blank steps, not the corridor.
+- FS16's C64 success is the late telling, not body memory, although its pose still carries the cue at mid-corridor (the probe is correlational).
+- Fix: a random telling phase per episode (offset uniform in 0…N−1) and a rerun of the 15 C64 runs, or E3T at L = 64–128 where step 64 falls inside the corridor.
+
+**C64 with a random telling phase (implemented and launched Nov 15, launcher job 21013410, timestamp 20261115173643, 15 runs).** `env.information.cue_phase: start | random` (default `start`, the earlier behaviour): with `random` each episode's first telling falls at a uniform step in 0…cue_interval−1, then every cue_interval steps, so the last telling before the choice is 0–63 steps old. Storage suffix `_ph:rnd` (abbreviated: the LSTM's name is 251 of the 255 bytes a folder allows), W&B tag `cue_phase:`, E3T condition label `C64r`. `scripts/e3t_random_phase.sh`: MLP, FS16 and LSTM-BPTT16, seeds 100–104, E3T's settings, then the E2 diagnostics and `evaluate_metrics.py`; the other E3T conditions under timestamp 20261112133519 are the reference. The training junction latch keeps E3T's version so the 90 reference runs stay comparable. Read it with the timing check binned by the age of the last telling at the junction: a memoryless agent should succeed only when that age fits its window.
+
+**C64r result (15/15 runs, Nov 16, all with auc.npy; diagnostics and timing check with 1000 episodes per seed).** Mean AUC, C64 fixed phase → random phase: MLP 0.44 → 0.39, FS16 0.67 → 0.68, LSTM 0.84 → 0.78. Median age of the last telling at the junction 24–32 steps (10–90%: 5–57).
+
+| Backbone | Solved | Success | Blinded from the bend | Success by age of the last telling (0–3 / 4–15 / 16–31 / 32–63) | Diagnostics |
+|---|---|---|---|---|---|
+| MLP | 0/5 | 0.47–0.53 | 0.48–0.52 | 0.45–0.68 / 0.47–0.64 / 0.45–0.54 / 0.47–0.52 | pose probe 0.49–0.57 |
+| FS16 | 5/5 | 0.95–1.00 | 0.94–1.00 | 0.92–1.00 / 0.99–1.00 / 0.99–1.00 / 0.91–1.00 | pose probe 0.96–1.00 |
+| LSTM-BPTT16 | 5/5 | 0.97–0.99 | 0.97–0.99 | 0.95–1.00 / 0.96–0.99 / 0.98–1.00 / 0.97–0.99 | swap hidden_other 0.01–0.02, pose_other 0.97–0.99 |
+
+- The LSTM remembers: success doesn't depend on any telling inside the corridor, and the recurrent-state swap flips the choice on every seed. That settles C64 for the LSTM (2/5 at the fixed phase were waiting for the step-64 telling).
+- FS16 solves by body memory: success is the same blinded from the bend and when the last telling is 32–63 steps old, past its 16 frames, and the pose alone decodes the cue at 0.96–1.00. FS16 never found this when never told (I0 0/5) or at the fixed phase (late telling). A plausible reading, not tested: tellings at random points in the corridor reward turning any cue into a lateral offset, which the visual cue at the start then uses.
+- The MLP stays at chance; only a telling 0–3 steps old lifts it a little (0.55–0.68 on 4 seeds).
+- For H8: at a 64-step gap the LSTM remembers as predicted, the MLP fails as predicted, and FS16 beats its prediction through the body, like the MLP at C4.
+
+**E3T at L = 64 (designed and launched Nov 17, `scripts/e3t_L64.sh`, launcher job 21239573, 60 runs).** At L = 32 FS16's body memory and the fixed telling phase both blur "told" vs "remembered". At L = 64, E2's FS16 never solves (pose probe at chance) and LSTM-BPTT256 solves 5/5, so this length separates the backbones. Conditions: I0 and C4r / C16r / C64r (random phase, as C64r above); backbones: MLP, FS16 and LSTM-BPTT256 (minibatch 4 envs, E2's equal-update setting; BPTT16 solves only 3/5 here); seeds 100–104; E3T's settings at 2L + 256 = 384 steps; then the E2 diagnostics, `evaluate_metrics.py` and `seed_stats.py` (FS16 and LSTM against the MLP per condition). C1, G1 and P1 are left out: at L = 32 they were at the ceiling (C1, G1) or answered (P1). Prediction for H8: the MLP at chance in every condition except possibly C4r; FS16 up at C4r, down from C16r on (a telling up to 15 steps old still sits in its window at C16r, so C16r is the open case); the LSTM up throughout.
+- **Junction latch fixed for these runs** (`NavigationEnv.at_junction`, shared with the diagnostics): the training latch now also counts any point past the corridor's end, so corner-cutting episodes get Φ = 0 in the rooms. E2 and the L = 32 E3T runs were trained with the box-only latch; the shaping telescopes either way, so the optimal policy is the same. The I0 runs here therefore aren't identical to E2's L = 64 seeds (also the reserved slots), and the comparison stays within this sweep.
+- **Storage names:** the LSTM-BPTT256 + cue name would be 256 bytes. Names over 255 bytes now use `gc:` / `ah:` for `grid_cell:` / `auxiliary_head:`, which `parse_storage_name` maps back. Every earlier folder keeps its name.
+
+**E3T at L = 64 result (60/60 runs, Nov 18; launcher 21239573 COMPLETED after 19:51 h, every run with auc.npy, no hidden failures; E2 diagnostics and the timing check `c64_timing.py` with 1000 deterministic episodes per seed, stats `stats/20261117110027.json`).** Cells: solved seeds (success ≥ 0.9) [success range], then AUC IQM [95% CI].
+
+| Backbone | C4r | C16r | C64r | I0 |
+|---|---|---|---|---|
+| MLP | 2/5 [0.66–0.91] | 0/5 [0.41–0.71] | 0/5 [0.46–0.50] | 0/5 [0.34–0.50] |
+| AUC | 0.55 [0.44, 0.66] | 0.33 [0.25, 0.43] | 0.31 [0.28, 0.36] | 0.26 [0.21, 0.33] |
+| FS16 | 5/5 [1.00] | 5/5 [1.00] | 1/5 [0.50–1.00] | 0/5 [0.49–0.51] |
+| AUC | 0.79 [0.63, 0.86] | 0.80 [0.78, 0.82] | 0.44 [0.34, 0.52] | 0.41 [0.39, 0.43] |
+| LSTM-BPTT256 | 5/5 [0.99–1.00] | 5/5 [0.99–1.00] | 5/5 [1.00] | 5/5 [0.98–1.00] |
+| AUC | 0.89 [0.66, 0.93] | 0.81 [0.59, 0.92] | 0.88 [0.74, 0.91] | 0.89 [0.81, 0.92] |
+
+Every seed reaches the junction (0.99–1.00). AUC, Welch + Holm at α = 0.01 per family of four:
+- LSTM vs MLP: significant at C16r (+0.44), C64r (+0.54) and I0 (+0.61), not at C4r (+0.28, p_holm 0.013).
+- FS16 vs MLP: significant at C16r (+0.46) and I0 (+0.15; both at chance, FS16 just reaches the 50% plateau sooner), not at C4r or C64r.
+- LSTM vs FS16: significant at C64r (+0.42) and I0 (+0.47), not at C4r or C16r.
+
+| Backbone, condition | Blinded from the bend | Blinded from 50% | Success by age of the last telling at the junction (0–3 / 4–15 / 16–31 / 32–63) | Other diagnostics | Reading |
+|---|---|---|---|---|---|
+| MLP, C4r | 0.25–0.50 | 0.22–0.51 | 0.71–0.92 / 0.54–0.88 / – / – | pose probe 0.95–1.00 | needs the tellings in the corridor, steering bridges the 3 blank steps |
+| MLP, C16r / C64r | 0.35–0.52 / 0.47–0.50 | same | chance in every bin (one C16r seed at 0.57–0.72) | pose probe 0.46–1.00 / 0.45–0.58 | chance |
+| FS16, C4r | 0.38–0.49 | 0.39–0.50 | 1.00 / 1.00 / – / – | pose probe 0.95–1.00 | window |
+| FS16, C16r | 0.21–0.38 | 0.22–0.39 | 1.00 / 1.00 / 1.00 / – | pose probe 0.91–1.00 | window (a telling 16–31 steps old still works on ~6% of episodes: the choice is made a few steps before the junction box) |
+| FS16, C64r | 0.32–0.51 | 0.43–0.78 | seed 100: 1.00 in every bin; others 0.41–1.00, mostly 0.50–0.73 at 32–63 | pose probe 0.63–0.77 | 1/5 holds a corridor telling for up to 63 steps through the body; the rest partly |
+| LSTM, C4r / C16r / C64r / I0 | 0.98–1.00 at C4r–C64r (C4r seed 102: 0.49) | 0.99–1.00 | ≥ 0.98 in every bin | swap hidden_other 0.00–0.17, pose_other 0.99–1.00; reset at the junction drops 0.00–0.31 | memory, 20/20 |
+
+- **H8 holds at L = 64, more cleanly than at L = 32.** The MLP is at chance from C16r on and only partly solves C4r (2/5) by steering between tellings inside the corridor. FS16 solves exactly while the last telling fits its 16 frames (C4r, C16r; blinded from the bend it falls to 0.21–0.49) and fails beyond (C64r 1/5, I0 0/5). The LSTM solves every condition, and the swap at mid-corridor sends it to the wrong room on all 20 seeds (success 0.00–0.17), so the cue is held in the recurrent state; blinding the corridor changes nothing.
+- C16r, the open case, goes to the window: FS16 solves it, but only with tellings in the corridor.
+- **FS16's L = 32 body memory doesn't reappear.** At L = 32 C64r it solved blinded from the bend (0.94–1.00) by turning the start cue into a lateral offset. At L = 64 no seed solves blinded from the bend. Seed 100 at C64r keeps a corridor telling up to 63 steps old through its pose (1.00 at age 32–63), but it still needs that telling (0.51 blinded from the bend).
+- The blinded FS16 runs fall below chance (0.21–0.49): with the slot zeroed it leans to one room more often than the visual start cue would give. That is consistent with the zero slot reading as one of the two cues. Not tested.
+- The LSTM's reset at the junction drops 0.00–0.31 (I0 mean 0.14), so part of the choice is already committed by pose on entering the junction, as in E2. The swap at mid-corridor is the clean memory test.
+- Run cost per run (with early stopping): MLP 1:41–2:54 h, FS16 1:14–6:18 h, LSTM-BPTT256 2:07–4:24 h.
+
+Launched Nov 12 with `E3T_L=32` (E2: LSTM-BPTT16 solves 2/5 seeds at L = 64), from `~/semproj-rl-comparison` on Euler:
+`E3T_L=32 sbatch --job-name=e3t_launcher --time=3-00:00:00 --ntasks=1 --cpus-per-task=1 --mem-per-cpu=4G --output=/cluster/scratch/eazevedo/semproj/e3_twin_rooms/launcher_%j.out scripts/e3_twin_rooms.sh`
 
 ### E4: Staged ablation of the remaining design choices ("perceive & act") — about 440 runs
 
@@ -275,6 +523,34 @@ Stage 2 base: **CNN encoder, FOV 180°, continuous, collision penalty 0.01, widt
 **CNN + LSTM + loop closure collapse.** It scored 0.01 [0.00, 0.09] against 0.62 for the same agent without the aux loss. This is a behaviour failure and shouldn't be read as "loop closure hurts memory". 9 of 10 runs stopped moving: mean speed command below 0.06, mean speed action around -2 and so clipped to 0, and already at iteration 100 in the seeds tracked over training (`hard_maze` 101). A stopped agent collects no reward and no loop labels, so the value and loop closure losses both go to about 0 and the policy can't recover. The stopped state is cheap: a collision costs 0.01, which is 41 steps of the 1/4096 time penalty. All 30 loop closure runs at collision penalty 0 sit on the MLP encoder and at most one per config ends with a dead value loss, but encoder and penalty change together there, so this doesn't separate the two. Gradient clipping isn't the cause: on a fresh agent the total norm is 0.30 against the limit of 0.5. The aux gradient is 7–9× the task gradient in the LSTM and encoder, though, so the shared features mostly follow the aux loss. Loop closure coefficient 1.0 was not tuned for this reward scale.
 
 **Collapse test (`scripts/e4_aux_collapse.sh`, 6 runs, medium_maze, seeds 100–102, mean AUC).** Each change alone removes the collapse. Stage 2 at penalty 0.01 and coefficient 1.0 scores 0.15 (0.44 / 0.00 / 0.00). Penalty 0 at coefficient 1.0 scores 0.52 (0.72 / 0.56 / 0.28). Coefficient 0.1 at penalty 0.01 scores 0.60 (0.77 / 0.28 / 0.76), level with CNN + LSTM without aux on the same seeds (0.59). Every run of both arms reaches 0.90–1.00 eval success. So the stopping needs both the collision penalty and an aux loss that dominates the shared features. The paper reports it as that interaction, not as an effect of loop closure. At a coefficient that doesn't swamp the task loss, loop closure neither helps nor hurts the CNN + LSTM here. That's 3 seeds on one room, a diagnostic and not a result.
+
+**Stage 3 configs (frozen Nov 16, before launch; `scripts/e4_stage3.sh`, seeds 1000–1009, medium_maze + hard_maze, 100 runs).** Only the action theme's leader (discrete 3) differs from Stage 2's base. The encoder (CNN), reward (collision penalty 0.01), capacity (width 64), FOV (180°) and memory (MLP backbone) leaders are the base itself, and no aux level beat its reference. So "leave one theme out" reverts a theme to Stage 1's value, and the capacity, FOV, memory and aux themes have nothing to leave out.
+
+| Config | Encoder | Action | Collision penalty | Role |
+|---|---|---|---|---|
+| best | CNN | discrete 3 | 0.01 | best combined (= Stage 2's discrete 3 config) |
+| −action | CNN | continuous | 0.01 | leave out action (= Stage 2's base) |
+| −encoder | MLP | discrete 3 | 0.01 | leave out encoder |
+| −reward | CNN | discrete 3 | 0.0 | leave out reward |
+| baseline | MLP | continuous | 0.0 | Stage 1's base |
+
+All at FOV 180°, width 64, MLP backbone, lr 1e-4, γ 0.999, 4096-step episodes, colour off, random goal. Test: best against each other config per room, Welch's t at α = 0.01 with Holm correction over the 4 comparisons × 2 rooms; IQM + stratified-bootstrap CI and probability of improvement alongside.
+
+**Stage 3 result (100/100 runs, Nov 17, timestamp 20261116094617, launcher 21066186, no hidden failures).** Success AUC per seed (1000–1009); IQM with 95% bootstrap CI over seeds; difference of means, P(best > other) and Holm-adjusted Welch p of best against each config (8 comparisons; * = below 0.01).
+
+| Config | medium_maze IQM | best − it | P(best >) | Holm p | hard_maze IQM | best − it | P(best >) | Holm p |
+|---|---|---|---|---|---|---|---|---|
+| best | 0.96 [0.93, 0.98] | | | | 0.90 [0.87, 0.93] | | | |
+| −action | 0.88 [0.79, 0.92] | +0.10 | 0.89 | 0.054 | 0.71 [0.59, 0.79] | +0.22 | 0.99 | 0.0085 * |
+| −encoder | 0.83 [0.77, 0.87] | +0.13 | 0.96 | 0.0007 * | 0.80 [0.65, 0.85] | +0.17 | 0.90 | 0.13 |
+| −reward | 0.89 [0.76, 0.93] | +0.12 | 0.87 | 0.13 | 0.76 [0.43, 0.89] | +0.24 | 0.78 | 0.13 |
+| baseline | 0.60 [0.51, 0.68] | +0.36 | 1.00 | < 0.001 * | 0.38 [0.21, 0.52] | +0.54 | 1.00 | < 0.001 * |
+
+- Best combined beats Stage 1's baseline in both rooms (+0.36 and +0.54 AUC), the CNN encoder on medium_maze and discrete actions on hard_maze; 4 of 8 tests pass at α = 0.01.
+- Best has the highest mean AUC in every comparison and the tightest seeds (0.83–0.98 in both rooms). The 4 non-significant tests come from seed failures in the leave-one-out configs: −reward has seeds at 0.36 (medium) and 0.12 / 0.10 (hard), −encoder one at 0.09 (hard), −action one at 0.31 (hard). Their IQMs sit closer to best's than their means. Read: the encoder, the collision penalty and discrete actions mostly make training reliable across seeds, and the size of their gain on the typical seed differs by room.
+- Final eval success (CR): best 98.4 / 96.1%, baseline 80.2 / 68.2%; SPL 0.56 / 0.40 vs 0.31 / 0.22.
+- Reported as tested: no seeds are added to rescue the borderline comparisons, since adding seeds after seeing the p-values breaks α = 0.01.
+- H6: best is first and the baseline last in both rooms; the three leave-one-out configs change order between the rooms. C_maze didn't run at the final seeds, so the three-tier τ uses Stage 1 for the easy room.
 
 All stages use 4096-step episodes and gamma 0.999. Stages 1 and 2 share medium_maze, so the Kendall τ between their rankings measures seed stability there plus the change of the second room (C_maze → hard_maze). The "by tier" result (H6) compares rankings across the three rooms C_maze < medium_maze < hard_maze.
 

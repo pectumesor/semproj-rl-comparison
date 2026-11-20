@@ -20,8 +20,21 @@ Generates the twin-room cue task (experiment E2) as room JSONs: rooms/twin_rooms
 The corridor length is L * max_speed, i.e. L steps at full speed, so L sets the memory horizon.
 Train with env.goal_mode=regions and env.colour_mode=off (or per_wall).
 
+K = 4 rooms (E2 optional, rooms/twin_rooms_K4_L<L>.json): the arms end in a cross corridor with a room at both
+ends, so the cue picks one of four identical rooms and a memoryless policy sits at 0.25:
+
+                       room ── cross corridor ── room
+                                     │ arm
+    alcove ── corridor ──────── T-junction
+                                     │ arm
+                       room ── cross corridor ── room
+
+The start, the corridor and the first junction are those of K = 2 (same junction_region and junction_path, so the
+shaping and the diagnostics are unchanged); the second choice comes about 12 steps after the first junction.
+
     python scripts/generate_twin_rooms.py                # L = 8 32 64 128 256
     python scripts/generate_twin_rooms.py --L 16 512
+    python scripts/generate_twin_rooms.py --rooms 4 --L 32 128
 """
 import argparse
 import json
@@ -43,6 +56,11 @@ BAFFLE_HALF = 50.0     # half width of the baffle (wider than the door, so the g
 GOAL_DEPTH = 130.0     # distance of the goal from the door, behind the baffle
 MARGIN = 10.0          # keep every coordinate positive (render's w2s has no offset)
 CUE_COLOURS = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]   # cue colour 0 -> room A, cue colour 1 -> room B
+# K = 4: longer arms, so the rooms beside the corridor clear its wall (room bottom 50 units above it)
+ARM_K4 = 120.0
+BRANCH = 60.0          # cross corridor from the arm to each room's door
+# Red, blue, green, yellow -> upper left, upper right, lower left, lower right room
+CUE_COLOURS_K4 = CUE_COLOURS + [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0]]
 WALL_COLOUR = [0.5, 0.5, 0.5]
 
 
@@ -57,11 +75,17 @@ def box_region(min_x, max_x, min_y, max_y):
     return [edge(min_x, min_y, max_x, min_y), edge(max_x, min_y, max_x, max_y),
             edge(max_x, max_y, min_x, max_y), edge(min_x, max_y, min_x, min_y)]
 
-def twin_rooms(L: int) -> dict:
+def twin_rooms(L: int, rooms: int = 2) -> dict:
+    if rooms not in (2, 4):
+        raise ValueError(f"Twin rooms come with 2 or 4 rooms, got {rooms}")
     half_w = CORRIDOR_WIDTH / 2
     corridor_len = L * MAX_SPEED
 
-    y0 = MARGIN + ROOM + ARM + half_w          # corridor centre line
+    if rooms == 2:
+        y0 = MARGIN + ROOM + ARM + half_w      # corridor centre line
+    else:
+        # The lower rooms are centred on their cross corridor, ARM_K4 + a corridor width below the centre line
+        y0 = MARGIN + ROOM / 2 + ARM_K4 + 2 * CORRIDOR_WIDTH
     x_alcove = MARGIN                           # alcove left wall
     x_shaft = x_alcove + (ALCOVE - CORRIDOR_WIDTH) / 2   # shaft (and bend) left wall, alcove centred on it
     x_corridor = x_shaft + CORRIDOR_WIDTH       # corridor start = bend's inner corner
@@ -87,6 +111,37 @@ def twin_rooms(L: int) -> dict:
     edges += [edge(x_corridor, y0 + half_w, x_junction, y0 + half_w),
               edge(x_shaft, y0 - half_w, x_junction, y0 - half_w)]
 
+    goal_points, goal_regions = [], []
+    if rooms == 4:
+        x_doors = (xc - half_w - BRANCH, xc + half_w + BRANCH)     # doors of the left and right rooms
+        # The upper left room sits above the corridor: it must end before the alcove does, or it would cut into it
+        if x_doors[0] - ROOM <= x_alcove + ALCOVE:
+            raise ValueError(f"L = {L} is too short for 4 rooms: the upper left room overlaps the cue alcove")
+        y_near = [y0 + sign * (half_w + ARM_K4) for sign in (1.0, -1.0)]   # cross corridor walls facing the junction
+        # Arms: left walls from the junction to the cross corridors, one right wall through both arms
+        edges += [edge(x_junction, y0 + half_w, x_junction, y_near[0]),
+                  edge(x_junction, y_near[1], x_junction, y0 - half_w),
+                  edge(xc + half_w, y_near[1], xc + half_w, y_near[0])]
+        for sign, near in zip((1.0, -1.0), y_near):
+            yc = near + sign * half_w           # cross corridor centre line
+            far = near + sign * CORRIDOR_WIDTH
+            edges += [edge(x_doors[0], far, x_doors[1], far),
+                      edge(x_doors[0], near, x_junction, near),
+                      edge(xc + half_w, near, x_doors[1], near)]
+            # Rooms: the right one opens to the left at its door, the left one is its mirror image
+            for side, x_door in zip((-1.0, 1.0), x_doors):
+                x_back = x_door + side * ROOM
+                edges += [edge(x_door, yc - ROOM / 2, x_door, yc - half_w),          # door wall, below the door
+                          edge(x_door, yc + half_w, x_door, yc + ROOM / 2),          # door wall, above the door
+                          edge(x_door, yc - ROOM / 2, x_back, yc - ROOM / 2),
+                          edge(x_door, yc + ROOM / 2, x_back, yc + ROOM / 2),
+                          edge(x_back, yc - ROOM / 2, x_back, yc + ROOM / 2),
+                          edge(x_door + side * BAFFLE_DEPTH, yc - BAFFLE_HALF,
+                               x_door + side * BAFFLE_DEPTH, yc + BAFFLE_HALF)]     # baffle
+                goal_points.append({"x": x_door + side * GOAL_DEPTH, "y": yc})
+                goal_regions.append(box_region(min(x_door, x_back), max(x_door, x_back), yc - ROOM / 2, yc + ROOM / 2))
+        return layout(L, edges, goal_points, goal_regions, CUE_COLOURS_K4, x_alcove, x_shaft, y_alcove, y0, x_junction)
+
     # Junction: left walls of the two arms and one right wall through both arms
     y_door_a = y0 + half_w + ARM                # door of room A (above)
     y_door_b = y0 - half_w - ARM                # door of room B (below)
@@ -95,7 +150,6 @@ def twin_rooms(L: int) -> dict:
               edge(xc + half_w, y_door_b, xc + half_w, y_door_a)]
 
     # Rooms: A opens downwards at y_door_a, B is A rotated by 180° about the junction centre
-    goal_points, goal_regions = [], []
     for sign, y_door in ((1.0, y_door_a), (-1.0, y_door_b)):
         y_back = y_door + sign * ROOM
         edges += [edge(xc - ROOM / 2, y_door, xc - half_w, y_door),           # door wall, left of the door
@@ -107,7 +161,12 @@ def twin_rooms(L: int) -> dict:
                        xc + BAFFLE_HALF, y_door + sign * BAFFLE_DEPTH)]       # baffle
         goal_points.append({"x": xc, "y": y_door + sign * GOAL_DEPTH})
         goal_regions.append(box_region(xc - ROOM / 2, xc + ROOM / 2, min(y_door, y_back), max(y_door, y_back)))
+    return layout(L, edges, goal_points, goal_regions, CUE_COLOURS, x_alcove, x_shaft, y_alcove, y0, x_junction)
 
+
+def layout(L, edges, goal_points, goal_regions, cue_colours, x_alcove, x_shaft, y_alcove, y0, x_junction) -> dict:
+    """The room JSON: everything up to the first junction is shared by K = 2 and K = 4."""
+    half_w = CORRIDOR_WIDTH / 2
     inset = 15.0
     return {
         "edges": edges,
@@ -125,7 +184,7 @@ def twin_rooms(L: int) -> dict:
         # diagnostics the progress along the corridor (last segment)
         "junction_path": [{"x": x_shaft + half_w, "y": y_alcove + ALCOVE}, {"x": x_shaft + half_w, "y": y0},
                           {"x": x_junction, "y": y0}],
-        "cue_colours": CUE_COLOURS,
+        "cue_colours": cue_colours,
         "memory_horizon_steps": L,
     }
 
@@ -133,10 +192,12 @@ def twin_rooms(L: int) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--L", type=int, nargs="+", default=[8, 32, 64, 128, 256])
+    parser.add_argument("--rooms", type=int, default=2, choices=[2, 4])
     args = parser.parse_args()
 
     for L in args.L:
-        path = ROOT_DIR / "rooms" / f"twin_rooms_L{L}.json"
+        # K = 2 keeps the name every earlier sweep stored its seeds under
+        path = ROOT_DIR / "rooms" / (f"twin_rooms_L{L}.json" if args.rooms == 2 else f"twin_rooms_K4_L{L}.json")
         with open(path, "w") as f:
-            json.dump(twin_rooms(L), f, indent=2)
+            json.dump(twin_rooms(L, args.rooms), f, indent=2)
         print(f"Wrote {path}")

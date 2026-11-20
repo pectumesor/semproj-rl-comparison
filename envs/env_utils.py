@@ -250,12 +250,14 @@ DISCRETE_ACTION_TABLES = {
 }
 
 GOAL_INFO_DIM = 5   # (distance, cos bearing, sin bearing, seen flag, age)
+CUE_INFO_DIM = 4    # one-hot of the cued room, up to 4 rooms (DEFAULT_CUE_COLOURS)
 
 def information_dims(cfg):
     """
-    Sizes of the information slots appended to the proprio vector: (goal, position, goal grid).
-    With env.reserve_info_slots every slot is allocated (zeros when unused), so conditions that
-    differ only in what the agent is told share the same input size.
+    Sizes of the information slots appended to the proprio vector: (goal, position, goal grid, cue).
+    With env.reserve_info_slots every slot but the cue's is allocated (zeros when unused), so conditions
+    that differ only in what the agent is told share the same input size. The cue slot has its own switch
+    (cue_info=reserved), so the input size of the runs before it didn't change.
     """
     info = cfg.env.information
     grid_dim = info.grid.modules * info.grid.phases
@@ -271,8 +273,9 @@ def information_dims(cfg):
     else:
         position_dim = grid_dim
     goal_grid_dim = grid_dim if (reserve or info.goal_grid) else 0
+    cue_dim = CUE_INFO_DIM if info.get("cue_info", "none") != "none" else 0
 
-    return goal_dim, position_dim, goal_grid_dim
+    return goal_dim, position_dim, goal_grid_dim, cue_dim
 
 def compute_proprio_dim(cfg):
     """Base proprio (last speed, last turning, ...) plus the information slots."""

@@ -68,6 +68,15 @@ information:
   # a noisy path-integrated position)
   position_info: none
   goal_grid: false            # grid code of the goal position
+  # Told the cue (twin rooms, E3T): none (no slot, as before) | reserved (slot of zeros, so conditions without the
+  # cue keep the input size) | every (one-hot of the cued room on every cue_interval-th step of the episode,
+  # zeros on the others; 1 = every step, the env does all the remembering)
+  cue_info: none
+  cue_interval: 1
+  # When the tellings fall: start (step 0, cue_interval, 2 cue_interval, ... as before) | random (each episode's first
+  # telling at a uniform step in 0..cue_interval-1, then every cue_interval steps). With start, a long interval
+  # can put a telling at the same point of every episode, e.g. at the junction at L = 32 for cue_interval=64
+  cue_phase: start
   # Always allocate every slot (zeros when unused) so conditions share the same input size
   reserve_info_slots: false
   seed: 0                     # orientations/phases of the grid code and the random Fourier features

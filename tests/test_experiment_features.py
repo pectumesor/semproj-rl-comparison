@@ -133,6 +133,67 @@ def test_twin_rooms_cue_hidden_past_the_bend(L):
     assert (env.cue_walls[wall_idx.clamp(min=0)] & (wall_idx >= 0)).any(-1).all()
 
 
+@pytest.mark.parametrize("L", [32, 128])
+def test_twin_rooms_k4(L):
+    from scripts.generate_twin_rooms import twin_rooms, CUE_HIDDEN_AFTER, CORRIDOR_WIDTH, MAX_SPEED, ROOM
+    import json
+
+    room_path = f"rooms/twin_rooms_K4_L{L}.json"
+    assert json.load(open(room_path)) == json.loads(json.dumps(twin_rooms(L, rooms=4)))
+    # Start, corridor and first junction are K = 2's, shifted only vertically
+    k2, k4 = twin_rooms(L), twin_rooms(L, rooms=4)
+    shift = k4["junction_path"][-1]["y"] - k2["junction_path"][-1]["y"]
+    assert [p["x"] for p in k4["junction_path"]] == [p["x"] for p in k2["junction_path"]]
+    assert k4["start_pos"]["y"] - k2["start_pos"]["y"] == shift
+
+    cfg = make_cfg(f"env.room_path={room_path}", "env.goal_mode=regions", "env.colour_mode=off",
+                   "env.fov=360", "env.ray_density=2.0", "env.information.cue_info=every")
+    env = make_env(cfg, num_envs=64)
+    env.reset()
+    assert len(env.goal_points) == 4 and len(env.cue_colours) == 4
+    assert torch.equal(env.cue_colour, env.cue_colours[env.goal_idx])
+    # Four identical rooms, all the same path length from the junction
+    sizes = env.goal_boxes[:, [1, 3]] - env.goal_boxes[:, [0, 2]]
+    assert torch.allclose(sizes, torch.full_like(sizes, ROOM))
+    junction = env.junction_box.view(2, 2).mean(-1)                       # centre (x, y)
+    offsets = (env.goal_points - junction).abs()
+    assert torch.allclose(offsets, offsets[0].expand_as(offsets))
+    # Told the cue: the one-hot names the goal room
+    assert torch.equal(env.cue_features().argmax(-1), env.goal_idx)
+
+    # Cue hidden past the bend: corridor, junction, arms, cross corridors and all four rooms, 360° rays
+    half_w = CORRIDOR_WIDTH / 2
+    y0 = float(junction[1])
+    x_junction = float(env.junction_box[0])
+    x_corridor = x_junction - L * MAX_SPEED
+    margin = 5.0
+    # Only reachable points: the gap between the corridor's outer wall and the upper left room is outside the
+    # building, and from there a ray runs along the corridor's outside to the alcove's outer walls
+    b = env.goal_boxes                                                      # (4, 4) upper left, upper right, ...
+    x_doors = (float(b[0, 1]), float(b[1, 0]))
+    boxes = [[x_corridor + CUE_HIDDEN_AFTER + margin, x_junction, y0 - half_w + margin, y0 + half_w - margin],
+             [x_junction + margin, x_junction + CORRIDOR_WIDTH - margin, float(b[2, 2:].mean()), float(b[0, 2:].mean())]]
+    boxes += [[x_doors[0], x_doors[1], float(b[k, 2:].mean()) - half_w + margin, float(b[k, 2:].mean()) + half_w - margin]
+              for k in (0, 2)]                                              # cross corridors
+    boxes = torch.tensor(boxes + b.tolist())
+    pos = torch.cat([box[[0, 2]] + torch.rand(2000, 2) * (box[[1, 3]] - box[[0, 2]]) for box in boxes])
+    pos = pos[~env.spawn_sampler.too_close_to_wall(pos)]
+    facing = torch.rand(pos.shape[0]) * 2 * torch.pi
+    _, _, _, wall_idx = env.ray_cast.scan(pos, facing)
+    sees_cue = env.cue_walls[wall_idx.clamp(min=0)] & (wall_idx >= 0)
+    assert not sees_cue.any(), f"{int(sees_cue.any(-1).sum())} of {pos.shape[0]} positions see a cue wall"
+
+    # Wrong room ends the episode, the right one is a success
+    action = torch.zeros(env.num_envs, 2)
+    env.agent_pos[:] = env.goal_points[(env.goal_idx + 1) % 4]
+    _, _, terminated, _, info = env.step(action)
+    assert terminated.all() and not info["success"].any()
+    env.reset()
+    env.agent_pos[:] = env.goal_pos
+    _, _, terminated, _, info = env.step(action)
+    assert info["success"].all() and terminated.all()
+
+
 def test_colour_modes():
     for mode in ("global", "off", "room_local", "per_wall"):
         env = make_env(make_cfg("env.room_path=rooms/four_room.json", f"env.colour_mode={mode}"))
@@ -167,6 +228,108 @@ def test_information_slot_shapes():
         assert cfg.env.proprio_dim == expected == obs["proprio"].shape[-1]
         assert env.observation_space["proprio"].shape == (expected,)
         assert torch.isfinite(obs["proprio"]).all()
+
+
+def test_cue_slot_tells_the_cue_every_interval():
+    common = ("env.room_path=rooms/twin_rooms_L8.json", "env.goal_mode=regions", "env.colour_mode=off",
+              "algorithm.max_steps=50", "env.information.reserve_info_slots=true")
+    every = make_cfg(*common, "env.information.cue_info=every", "env.information.cue_interval=4")
+    reserved = make_cfg(*common, "env.information.cue_info=reserved")
+    # Same input size with and without the cue, 4 wider than the reserved slots alone
+    assert every.env.proprio_dim == reserved.env.proprio_dim == make_cfg(*common).env.proprio_dim + 4
+
+    env = make_env(every, num_envs=6)
+    obs, _ = env.reset()
+    for t in range(13):
+        cue = obs["proprio"][:, -4:]
+        if t % 4 == 0:
+            assert torch.equal(cue.argmax(-1), env.goal_idx) and torch.equal(cue.sum(-1), torch.ones(6))
+        else:
+            assert (cue == 0).all()
+        obs, *_ = env.step(torch.zeros(6, 2))
+    # A reset tells the new episode's cue at once
+    obs, _ = env.reset()
+    assert torch.equal(obs["proprio"][:, -4:].argmax(-1), env.goal_idx)
+
+    env = make_env(reserved, num_envs=6)
+    obs, _ = env.reset()
+    assert (obs["proprio"][:, -4:] == 0).all()
+    with pytest.raises(ValueError):
+        make_env(make_cfg("env.room_path=rooms/four_room.json", "env.information.cue_info=every"))
+
+
+def test_e3t_storage_names_and_conditions():
+    from scripts.train import run_names
+    from scripts.e4_promotion import parse_storage_name
+    from scripts.paper_figures import e3t_condition
+
+    common = ["env.room_path=rooms/twin_rooms_L64.json", "env.goal_mode=regions", "env.junction_shaping=1.0",
+              "env.information.reserve_info_slots=true"]
+    conditions = {"C16": ["env.information.cue_info=every", "env.information.cue_interval=16"],
+                  "I0": ["env.information.cue_info=reserved"],
+                  "G1": ["env.information.cue_info=reserved", "env.information.goal_info=oracle"],
+                  "P1": ["env.information.cue_info=reserved", "env.information.position_info=xy"]}
+    names = {c: run_names(make_cfg(*common, *o))[1] for c, o in conditions.items()}
+    assert len(set(names.values())) == len(names)
+    for condition, name in names.items():
+        fields = parse_storage_name(name)
+        # The fields after lr parse on their own, lr keeps its value
+        assert fields["lr"] == "0.0003" and fields["jshape"] == "1.0"
+        assert e3t_condition(fields) == condition
+    assert e3t_condition(parse_storage_name(run_names(make_cfg(*common))[1])) is None   # no cue slot: not E3T
+
+
+def test_random_cue_phase():
+    from scripts.train import run_names
+    from scripts.e4_promotion import parse_storage_name
+    from scripts.paper_figures import e3t_condition
+
+    common = ("env.room_path=rooms/twin_rooms_L8.json", "env.goal_mode=regions", "env.colour_mode=off",
+              "algorithm.max_steps=200", "env.information.reserve_info_slots=true",
+              "env.information.cue_info=every", "env.information.cue_interval=16")
+    env = make_env(make_cfg(*common, "env.information.cue_phase=random"), num_envs=64)
+    torch.manual_seed(0)
+    obs, _ = env.reset()
+    told = []
+    for t in range(40):
+        told.append(obs["proprio"][:, -4:].sum(-1) > 0)
+        obs, *_ = env.step(torch.zeros(64, 2))
+    told = torch.stack(told)                                                 # (T, E)
+    # Every env is told every 16 steps from its own first telling, at a step in 0..15
+    first = told.float().argmax(0)
+    assert (first < 16).all() and len(first.unique()) > 4
+    steps = torch.arange(40)[:, None]
+    assert torch.equal(told, (steps >= first) & ((steps - first) % 16 == 0))
+    assert torch.equal(first, env.cue_offset)
+
+    # The default keeps a telling on step 0 and the name of the earlier runs
+    start = make_cfg(*common)
+    assert run_names(start)[1] == run_names(make_cfg(*common, "env.information.cue_phase=start"))[1]
+    obs, _ = make_env(start, num_envs=4).reset()
+    assert (obs["proprio"][:, -4:].sum(-1) == 1).all()
+
+    name = run_names(make_cfg(*common, "env.information.cue_phase=random"))[1]
+    fields = parse_storage_name(name)
+    assert fields["cue"] == "16" and fields["ph"] == "rnd" and e3t_condition(fields) == "C16r"
+    with pytest.raises(ValueError):
+        make_env(make_cfg(*common, "env.information.cue_phase=late"))
+
+
+def test_lstm_layers_in_the_storage_name():
+    from scripts.train import run_names
+    from scripts.e4_promotion import parse_storage_name
+
+    common = ["env.room_path=rooms/twin_rooms_L64.json", "env.goal_mode=regions", "env.junction_shaping=1.0"]
+    names = {(b, n): run_names(make_cfg(*common, f"backbone={b}_backbone", f"backbone.lstm_num_layers={n}"))[1]
+             for b in ("lstm", "gru") for n in (1, 2, 3)}
+    assert len(set(names.values())) == len(names)
+    # 2 layers is the default every earlier recurrent run used, so its folders keep their names
+    assert "_layers:" not in names["lstm", 2] and "_layers:" not in names["gru", 2]
+    for (_, n), name in names.items():
+        fields = parse_storage_name(name)
+        assert fields.get("layers") == (None if n == 2 else str(n)) and fields["jshape"] == "1.0"
+    # The MLP config has no lstm_num_layers, its name must not read it
+    assert "_layers:" not in run_names(make_cfg(*common))[1]
 
 
 def test_goal_information_modes():
@@ -326,6 +489,33 @@ def test_junction_distance_and_corridor_fraction():
     assert torch.allclose(env.corridor_fraction(), torch.tensor([0.5, 0.5, 1.0, 0.0]), atol=1e-4)
 
 
+def test_at_junction_counts_the_corner_cut():
+    from scripts.e2_diagnostics import at_junction
+
+    env = make_env(make_cfg("env.room_path=rooms/twin_rooms_L8.json", "env.goal_mode=regions"), num_envs=4)
+    env.reset()
+    edge = env.junction_path[-1]
+    # In the box; past the corridor's end beside the box (one diagonal step from the corridor's corner, as an
+    # agent turning early into an arm lands); in the corridor just before the end; at the start
+    env.agent_pos[:] = torch.stack([edge + torch.tensor([20.0, 0.0]), edge + torch.tensor([5.0, 37.0]),
+                                    edge - torch.tensor([5.0, 0.0]), env.initial_pos])
+    assert env.in_junction().tolist() == [True, False, False, False]
+    assert at_junction(env).tolist() == [True, True, False, False]
+
+
+def test_shaping_latch_counts_the_corner_cut():
+    # Before Nov 17 the training latch used the box alone, so a corner-cutting agent kept a nonzero potential
+    env = make_env(make_cfg("env.room_path=rooms/twin_rooms_L8.json", "env.goal_mode=regions", "env.colour_mode=off",
+                            "env.junction_shaping=1.0"), num_envs=2)
+    env.reset()
+    edge = env.junction_path[-1]
+    env.agent_pos[:] = torch.stack([edge + torch.tensor([5.0, 37.0]), edge - torch.tensor([5.0, 0.0])])
+    env.step(torch.zeros(2, 2))
+    assert env.past_junction.tolist() == [True, False]
+    potential = env.junction_potential_now()
+    assert potential[0] == 0.0 and potential[1] < 0.0
+
+
 def test_junction_shaping_telescopes_and_ignores_the_cue():
     cfg = make_cfg("env.room_path=rooms/twin_rooms_L8.json", "env.goal_mode=regions", "env.colour_mode=off",
                    "env.junction_shaping=1.0", "env.gamma=0.999", "algorithm.max_steps=1000")
@@ -383,24 +573,40 @@ def test_mirror_pose_and_partners():
     mirror_pose(env, mask)
     assert torch.allclose(get_pose(env), before, atol=1e-4)
 
+    # Pose probe: a body that holds the cue in its lateral offset is read off, one that doesn't sits at chance
+    from scripts.e2_diagnostics import pose_probe
+    n = 400
+    cue_ep = torch.randint(0, 2, (n,))
+    pose = torch.zeros(n, 5)
+    pose[:, 0] = mid[0]
+    pose[:, 1] = y0 + torch.where(cue_ep == 0, 12.0, -12.0) + torch.randn(n)
+    source = {"intervened": np.ones(n, dtype=bool), "point_pose": pose.numpy(), "cue": cue_ep.numpy()}
+    body = pose_probe(env, source, num_classes=2, seed=0)
+    assert body["accuracy"] > 0.95 and body["offset_by_cue"][0] > 10 and body["offset_by_cue"][1] < -10
+    pose[:, 1] = y0 + torch.randn(n)
+    source["point_pose"] = pose.numpy()
+    assert 0.35 < pose_probe(env, source, num_classes=2, seed=0)["accuracy"] < 0.65
+
     cue = torch.tensor([0, 0, 1, 1])
     assert partners(cue, same=False).tolist() == [2, 2, 0, 0]
     assert partners(cue, same=True).tolist() == [1, 0, 3, 2]
     assert partners(torch.tensor([0, 0]), same=False).tolist() == [-1, -1]
 
 
-@pytest.mark.parametrize("backbone", ["lstm_backbone", "gru_backbone"])
-def test_swaps_copy_the_partners_state_and_pose(backbone):
+# 1 and 3 layers for the layer check (scripts/e2_lstm_layers.sh): the state is copied for every layer
+@pytest.mark.parametrize("backbone,layers", [("lstm_backbone", 2), ("gru_backbone", 2),
+                                             ("lstm_backbone", 1), ("lstm_backbone", 3)])
+def test_swaps_copy_the_partners_state_and_pose(backbone, layers):
     from scripts.e2_diagnostics import diagnostic_rollouts, partners
 
     cfg = make_cfg("env.room_path=rooms/twin_rooms_L8.json", "env.goal_mode=regions", "env.colour_mode=off",
-                   "algorithm.max_steps=20", f"backbone={backbone}")
+                   "algorithm.max_steps=20", f"backbone={backbone}", f"backbone.lstm_num_layers={layers}")
     env = make_env(cfg, num_envs=8)
     num_rays = compute_num_rays(cfg.env.fov, cfg.env.ray_density)
     agent = create_ppo_agent(ray_dim=np.array([cfg.env.ray_encoding, num_rays]), cfg=cfg)
     # A point every episode passes on its first step, so every source episode records it
     source = diagnostic_rollouts(agent, env, recurrent=True, seed=0, corridor_fraction=-100.0)
-    assert source["intervened"].all() and source["point_state"][0].shape[1] == 8
+    assert source["intervened"].all() and source["point_state"][0].shape[:2] == (layers, 8)
 
     partner = partners(torch.as_tensor(source["cue"]), same=False)
     swap = diagnostic_rollouts(agent, env, recurrent=True, seed=0, intervention="swap_pose",
@@ -545,6 +751,7 @@ def test_paper_figure_e2_names_come_from_the_real_storage_names(tmp_path):
 
     # The body vs memory checks land in the csv, a check with no episode at its point (n = 0) stays empty
     result.update({"mirror": {"baseline": {"n": 10, "success": 1.0}, "mirrored": {"n": 10, "success": 0.9}},
+                   "pose_probe": {"n": 10, "accuracy": 0.8, "offset_by_cue": [10.0, -10.0]},
                    "swap": {"corridor_fraction": 0.5, "hidden_other": {"n": 10, "success": 0.1},
                             "pose_other": {"n": 0}},
                    "reset_sweep": [{"corridor_fraction": 0.25, "n": 10, "success": 0.5}]})
@@ -553,7 +760,44 @@ def test_paper_figure_e2_names_come_from_the_real_storage_names(tmp_path):
     import csv
     csv_row = next(csv.DictReader(open(tmp_path / "table_e2.csv")))
     assert float(csv_row["mirror_success"]) == 0.9 and float(csv_row["swap_hidden_other"]) == 0.1
+    assert float(csv_row["pose_probe"]) == 0.8
     assert float(csv_row["reset_at_0.25"]) == 0.5 and np.isnan(float(csv_row["swap_pose_other"]))
+
+
+def test_paper_figure_e3t_draws_every_condition(tmp_path):
+    import json
+    from omegaconf import OmegaConf
+    from scripts.train import run_names
+    from scripts.paper_figures import figure_e3t, e2_table, e3t_condition
+
+    sweep_dir = tmp_path / "eval_metrics" / "1"
+    common = ["env.room_path=rooms/twin_rooms_L64.json", "env.goal_mode=regions", "env.junction_shaping=1.0",
+              "env.information.reserve_info_slots=true"]
+    told = {"C1": ["env.information.cue_info=every", "env.information.cue_interval=1"],
+            "C16": ["env.information.cue_info=every", "env.information.cue_interval=16"],
+            "I0": ["env.information.cue_info=reserved"],
+            "G1": ["env.information.cue_info=reserved", "env.information.goal_info=oracle"]}
+    backbones = {"MLP": ["backbone=mlp_backbone"], "LSTM": ["backbone=lstm_backbone"]}
+    for condition, o in told.items():
+        for series, b in backbones.items():
+            name = run_names(make_cfg(*common, *o, *b))[1]
+            success = 100.0 if condition in ("C1", "G1") or series == "LSTM" else 50.0   # CR in %
+            fake_seeds(sweep_dir, "twin_rooms_L64", name, [success] * 3, file_name="cr_values.npy")
+            seed_dir = sweep_dir / "twin_rooms_L64" / name / "seed_100"
+            (seed_dir / "e2_diagnostics.json").write_text(json.dumps(
+                {"memory": {"success": success / 100, "wrong_room": 0.0, "timeout": 0.0, "confusion": [[1, 0, 0], [0, 1, 0]]}}))
+    cfg = OmegaConf.create({"timestamp": 1})
+    (tmp_path / "figures" / "1").mkdir(parents=True)
+    _, _, rows = figure_e3t(sweep_dir, tmp_path, {}, np.random.default_rng(0), cfg)
+    assert {(r["condition"], r["series"]) for r in rows} == {(c, s) for c in told for s in backbones}
+    assert next(r for r in rows if (r["condition"], r["series"]) == ("I0", "MLP"))["iqm"] == pytest.approx(0.5)
+    import csv
+    table = list(csv.DictReader(open(tmp_path / "figures" / "1" / "table_e3t.csv")))
+    assert len(table) == 8 and {row["condition"] for row in table} == set(told)
+
+    # Without a condition two of these configs would share an E2 table row: refused, not averaged
+    with pytest.raises(RuntimeError):
+        e2_table(sweep_dir, tmp_path, table_L=64)
 
 
 def test_paper_figure_kendall_tau():

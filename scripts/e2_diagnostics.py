@@ -15,10 +15,15 @@ policy) and reports:
        shapes the trajectory the current observation carries it too, so high accuracy alone isn't memory.
     4. Reset sweep (recurrent backbones): the reset of 1., at several fractions of the corridor instead of the
        junction. Where the reset stops hurting the choice is committed, to the recurrent state or to the body.
-    5. Mirrored pose (memoryless and recurrent, no frame stack): halfway down the corridor, reflect position,
+    5. Pose probe (every backbone): logistic regression decoding the cue from the pose alone (lateral offset,
+       heading, last action) halfway down the corridor. Well above chance means the body carries the cue, not
+       that the choice uses it: recurrent agents that keep the cue in memory also steer by it, and 7. decides
+       for them. For a frame stack, which 6. and 7. can't run on, success above chance while the cue is older
+       than the stack leaves only the body, and the probe shows where (FS16 kept it in its lateral offset).
+    6. Mirrored pose (memoryless and recurrent, no frame stack): halfway down the corridor, reflect position,
        heading and last turn about the centre line and keep the recurrent state (Déletang et al. 2021). An agent
        that keeps the cue in its lateral offset or heading falls below chance, one that keeps it in memory doesn't.
-    6. Swap (recurrent backbones): at the same point, take the recurrent state, the pose or both from an episode
+    7. Swap (recurrent backbones): at the same point, take the recurrent state, the pose or both from an episode
        of the other cue. The room then follows whichever carries the cue; a swap with an episode of the same cue
        is the control for the damage the patch itself does.
 
@@ -96,6 +101,10 @@ def partners(cue: torch.Tensor, same: bool) -> torch.Tensor:
                 partner[i] = j
                 break
     return partner
+
+def at_junction(base) -> torch.Tensor:
+    """(E,) in the junction or past the corridor's end, see NavigationEnv.at_junction (the training latch uses it too)."""
+    return base.at_junction()
 
 # Interventions applied once per episode at the intervention point, see diagnostic_rollouts
 INTERVENTIONS = ("none", "reset", "mirror", "swap_hidden", "swap_pose", "swap_both")
@@ -175,7 +184,7 @@ def diagnostic_rollouts(agent, env, recurrent: bool, seed: int, intervention: st
 
         since_cue = torch.where(base.cue_visible, 0, torch.where(since_cue >= 0, since_cue + 1, since_cue))
 
-        entered = base.in_junction() & active
+        entered = at_junction(base) & active
         reached |= entered
         here = entered if corridor_fraction is None else (base.corridor_fraction() >= corridor_fraction) & active
         first_time = here & ~at_point
@@ -261,6 +270,35 @@ def fit_logistic(x, y, num_classes: int, l2: float = 1e-3, steps: int = 200):
     opt.step(closure)
     return lambda z: (z @ weight + bias).argmax(dim=-1)
 
+def pose_features(base, pose: torch.Tensor) -> torch.Tensor:
+    """(N, 5) signed offset from the corridor's centre line, cos/sin of the heading relative to the corridor, last action."""
+    a, b = base.junction_path[-2], base.junction_path[-1]
+    u = (b - a) / (b - a).norm()
+    rel = pose[:, :2] - a
+    offset = u[0] * rel[:, 1] - u[1] * rel[:, 0]                          # left of the corridor direction > 0
+    heading = pose[:, 2] - torch.atan2(u[1], u[0])
+    return torch.stack([offset, torch.cos(heading), torch.sin(heading), pose[:, 3], pose[:, 4]], dim=-1)
+
+def pose_probe(base, source, num_classes: int, seed: int, test_frac: float = 0.3, min_per_split: int = 20):
+    """
+    Held-out accuracy of decoding the cue from the pose alone at the intervention point (pose_features, logistic
+    regression, disjoint train and test episodes), plus the mean lateral offset per cue. Accuracy well above chance
+    means the body carries the cue, not that the choice depends on it (see 5. in the module docstring).
+    """
+    keep = torch.as_tensor(source["intervened"])
+    features = pose_features(base, torch.as_tensor(source["point_pose"]))[keep]
+    labels = torch.as_tensor(source["cue"])[keep]
+    offsets = [float(features[labels == k, 0].mean()) if (labels == k).any() else None for k in range(num_classes)]
+    result = {"n": int(keep.sum()), "accuracy": None, "offset_by_cue": offsets}
+    rng = np.random.default_rng(seed)
+    is_test = torch.as_tensor(rng.random(len(labels)) < test_frac)
+    train, test = ~is_test, is_test
+    if int(train.sum()) >= min_per_split and int(test.sum()) >= min_per_split and labels[train].unique().numel() > 1:
+        mean, std = features[train].mean(0), features[train].std(0) + 1e-6    # train statistics only
+        predict = fit_logistic((features[train] - mean) / std, labels[train], num_classes)
+        result["accuracy"] = float((predict((features[test] - mean) / std) == labels[test]).float().mean())
+    return result
+
 def linear_probe(hidden, labels, since, episode, num_classes: int, seed: int, test_frac: float = 0.3,
                  min_per_split: int = 20):
     """
@@ -340,8 +378,11 @@ def main(cfg: DictConfig):
 
         if recurrent:
             reset = diagnostic_rollouts(agent, env, recurrent, seed, intervention="reset")
-            result["reset_at_junction"] = summarise(reset, num_rooms)
-            result["reset_drop"] = result["memory"]["success"] - result["reset_at_junction"]["success"]
+            # Over the episodes that got reset: the others never reached the junction, and the same seed gives the
+            # same episodes up to the reset, so the drop compares the same episodes with and without it
+            result["reset_at_junction"] = summarise(reset, num_rooms, reset["intervened"])
+            result["reset_drop"] = (summarise(memory, num_rooms, reset["intervened"]).get("success", float("nan"))
+                                    - result["reset_at_junction"].get("success", float("nan")))
             arrays.update({f"reset_{key}": value for key, value in reset.items()})
             if "probe" in memory:
                 result["probe"] = linear_probe(*memory["probe"], num_classes=num_rooms, seed=seed)
@@ -353,10 +394,13 @@ def main(cfg: DictConfig):
                 result["reset_sweep"].append({"corridor_fraction": fraction,
                                               **summarise(sweep, num_rooms, sweep["intervened"])})
 
-        # Body vs recurrent memory at the intervention point, rates over the episodes that got there. Not with a
-        # frame stack: its older frames would still show the pose before the intervention
-        if not frame_stack and env.unwrapped.junction_path is not None:
+        # Body vs recurrent memory at the intervention point, rates over the episodes that got there
+        if env.unwrapped.junction_path is not None:
             source = diagnostic_rollouts(agent, env, recurrent, seed, corridor_fraction=point)
+            # Every backbone: how well the pose there alone tells the cue (FS16 kept it in its lateral offset)
+            result["pose_probe"] = pose_probe(env.unwrapped, source, num_classes=num_rooms, seed=seed)
+        if not frame_stack and env.unwrapped.junction_path is not None:
+            # Not with a frame stack: its older frames would still show the pose before the intervention
             mirror = diagnostic_rollouts(agent, env, recurrent, seed, intervention="mirror", corridor_fraction=point)
             # Mirrored pose: success stays if the cue is kept in the recurrent state, falls below chance if it is
             # kept in the lateral offset or heading. "baseline" is the same episodes without any intervention
@@ -388,7 +432,9 @@ def main(cfg: DictConfig):
         with open(out_log / "results.jsonl", "a") as f:
             f.write(json.dumps({key: value for key, value in result.items() if key != "probe"}) + "\n")
 
-        reset_str = (f" reset_success={result['reset_at_junction']['success']:.2f} drop={result['reset_drop']:+.2f}"
+        # No episode got reset when none reached the junction: nan, not a KeyError after the results are written
+        reset_str = (f" reset_success={result['reset_at_junction'].get('success', float('nan')):.2f}"
+                     f" drop={result['reset_drop']:+.2f}"
                      if recurrent else "")
         probe_str = (" probe=" + ",".join(f"{row['bin'][0]}-{row['bin'][1]}:{row['accuracy']:.2f}"
                                           for row in result.get("probe", []) if row["accuracy"] is not None))
@@ -399,6 +445,11 @@ def main(cfg: DictConfig):
         if "reset_sweep" in result:
             print("[E2] reset sweep success: " + " ".join(f"{row['corridor_fraction']:.2f}:{rate(row)}"
                                                           for row in result["reset_sweep"]))
+        if "pose_probe" in result:
+            probe = result["pose_probe"]
+            accuracy = f"{probe['accuracy']:.2f}" if probe["accuracy"] is not None else "n/a"
+            offsets = " ".join(f"{o:+.1f}" if o is not None else "n/a" for o in probe["offset_by_cue"])
+            print(f"[E2] pose probe at {point:.2f}: accuracy {accuracy} (n={probe['n']}), lateral offset per cue {offsets}")
         if "mirror" in result:
             print(f"[E2] mirror at {point:.2f}: baseline {rate(result['mirror']['baseline'])}"
                   f" mirrored {rate(result['mirror']['mirrored'])}")

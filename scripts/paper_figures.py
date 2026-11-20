@@ -14,6 +14,8 @@ scripts/seed_stats.py.
     e2     e2_twin_rooms         fig3: success vs L per backbone, BPTT window x L heatmap;
                                  table_e2: the checks of scripts/e2_diagnostics.py, as .csv (all L) and .tex (one L)
     e3     e3_information        fig4: AUC per information condition and backbone, memory gain row
+    e3t    e3_twin_rooms         fig_e3t: success vs how often the cue is told, per backbone, plus the goal and
+                                 position conditions; table_e3t: the checks of scripts/e2_diagnostics.py per condition
     e4     e4_stage<n>           fig2_right: AUC effect of every level against its reference, per room, and the
                                  Kendall tau between rooms. Run scripts/e4_promotion.py first
 
@@ -92,6 +94,8 @@ E3_CONDITIONS = {
     ("none", "noisy_grid", "False"):        "P4",
     ("none", "grid", "True"):               "P5",
 }
+# E3T conditions in figure order: told the cue every 1, 4, 16, 64 steps, never (I0), told the goal, told the position
+E3T_CONDITIONS = ["C1", "C4", "C16", "C64", "I0", "G1", "P1"]
 
 
 def paper_style():
@@ -298,18 +302,26 @@ def memory_horizon(room: str):
 def e2_order(L, series, window):
     return L, E2_ORDER.index(series), window or 0
 
-def e2_table(sweep_dir: Path, out_dir: Path, table_L: int):
+def e2_table(sweep_dir: Path, out_dir: Path, table_L: int, condition_of=None, name: str = "table_e2"):
     """
     The memory checks of scripts/e2_diagnostics.py: mean and standard error over seeds per L and config.
-    Saved as table_e2.csv (every L) and table_e2.tex (table_L only, probe at the bin that holds L, i.e. how
-    well the cue can still be read from the hidden state when the agent reaches the junction).
+    Saved as <name>.csv (every L) and, without condition_of, table_e2.tex (table_L only, probe at the bin that holds
+    L, i.e. how well the cue can still be read from the hidden state when the agent reaches the junction).
+    condition_of(fields of the storage name) adds a condition to the row key (E3T), None leaves the config out.
     """
-    by_config = {}
+    by_config, storage_names = {}, {}
     for path in sorted(sweep_dir.glob("*/*/seed_*/e2_diagnostics.json")):
+        fields = parse_storage_name(path.parents[1].name)
+        condition = condition_of(fields) if condition_of is not None else None
+        if condition_of is not None and condition is None:
+            continue
+        key = (memory_horizon(path.parents[2].name), *e2_key(fields), condition)
+        # Two storage names on one row would silently be averaged together
+        storage_names.setdefault(key, set()).add(path.parents[1].name)
+        if len(storage_names[key]) > 1:
+            raise RuntimeError(f"Two configs share the table row {key}: {sorted(storage_names[key])}")
         with open(path) as f:
-            result = json.load(f)
-        L = memory_horizon(path.parents[2].name)
-        by_config.setdefault((L, *e2_key(parse_storage_name(path.parents[1].name))), []).append(result)
+            by_config.setdefault(key, []).append(json.load(f))
     if not by_config:
         warnings.warn(f"No e2_diagnostics.json under {sweep_dir}, no table")
         return
@@ -325,9 +337,15 @@ def e2_table(sweep_dir: Path, out_dir: Path, table_L: int):
         confusion = np.array(result["memory"]["confusion"])[:, :-1]
         return float(np.trace(confusion) / confusion.sum()) if confusion.sum() > 0 else None
 
+    def order(key):
+        L, series, window, condition = key
+        return (*e2_order(L, series, window), E3T_CONDITIONS.index(condition) if condition in E3T_CONDITIONS else -1)
+
     rows = []
-    for (L, series, window), results in sorted(by_config.items(), key=lambda item: e2_order(*item[0])):
+    for (L, series, window, condition), results in sorted(by_config.items(), key=lambda item: order(item[0])):
         row = {"L": L, "series": series, "window": window, "seeds": len(results)}
+        if condition_of is not None:
+            row["condition"] = condition
         columns = {"success":     [r["memory"]["success"] for r in results],
                    "wrong_room":  [r["memory"]["wrong_room"] for r in results],
                    "timeout":     [r["memory"]["timeout"] for r in results],
@@ -337,9 +355,10 @@ def e2_table(sweep_dir: Path, out_dir: Path, table_L: int):
                    "reset_drop":  [r.get("reset_drop") for r in results],
                    # Body vs recurrent memory, over the episodes that got to the intervention point
                    "mirror_baseline": [r.get("mirror", {}).get("baseline", {}).get("success") for r in results],
-                   "mirror_success": [r.get("mirror", {}).get("mirrored", {}).get("success") for r in results]}
-        for name in ("hidden_other", "pose_other", "both_other", "hidden_same"):
-            columns[f"swap_{name}"] = [r.get("swap", {}).get(name, {}).get("success") for r in results]
+                   "mirror_success": [r.get("mirror", {}).get("mirrored", {}).get("success") for r in results],
+                   "pose_probe": [r.get("pose_probe", {}).get("accuracy") for r in results]}
+        for swap in ("hidden_other", "pose_other", "both_other", "hidden_same"):
+            columns[f"swap_{swap}"] = [r.get("swap", {}).get(swap, {}).get("success") for r in results]
         for sweep in results[0].get("reset_sweep", []):
             fraction = sweep["corridor_fraction"]
             columns[f"reset_at_{fraction:g}"] = [next((row.get("success") for row in r.get("reset_sweep", [])
@@ -348,10 +367,13 @@ def e2_table(sweep_dir: Path, out_dir: Path, table_L: int):
         for low, high in [probe["bin"] for probe in results[0].get("probe", [])]:
             columns[f"probe_{low}_{high}"] = [next(p["accuracy"] for p in r["probe"] if p["bin"] == [low, high])
                                               for r in results]
-        for name, values in columns.items():
-            row[name], row[f"{name}_se"] = mean_se(values)
+        for column, values in columns.items():
+            row[column], row[f"{column}_se"] = mean_se(values)
         rows.append(row)
-    save_rows(rows, out_dir / "table_e2.csv")
+    save_rows(rows, out_dir / f"{name}.csv")
+    if condition_of is not None:
+        print(f"Saved {out_dir / name}.csv")
+        return
 
     def cell(row, name):
         return "--" if np.isnan(row.get(name, float("nan"))) else f"{row[name]:.2f} $\\pm$ {row[f'{name}_se']:.2f}"
@@ -478,6 +500,68 @@ def figure_e3(sweep_dir: Path, storage: Path, figure, rng, cfg):
     return "fig4", fig, rows + gains
 
 
+# -- E3T: told or remembered, in the twin rooms --
+
+def e3t_condition(fields):
+    """The plan's E3T condition of a storage name, None for anything else."""
+    cue, told = fields.get("cue"), (fields["ginfo"], fields["pinfo"], fields["ggrid"])
+    if cue is None:
+        return None
+    if cue != "0" and told == ("none", "none", "False"):
+        # "r": random telling phase, a separate condition (not on the interval axis, but in the table)
+        return f"C{cue}" + ("r" if fields.get("ph") == "rnd" else "")
+    if cue == "0":
+        return {("none", "none", "False"): "I0", ("oracle", "none", "False"): "G1",
+                ("none", "xy", "False"): "P1"}.get(told)
+    return None
+
+def figure_e3t(sweep_dir: Path, storage: Path, figure, rng, cfg):
+    n_boot = int(figure.get("n_boot", 2000))
+
+    def key_of(fields):
+        condition = e3t_condition(fields)
+        return None if condition is None else (condition, e2_key(fields)[0])
+
+    cells = collect(sweep_dir, "success", key_of)
+    rows = [{"room": room, "condition": key[0], "series": key[1], **score(values, rng, n_boot)}
+            for (room, key), values in sorted(cells.items(), key=lambda item: (E3T_CONDITIONS.index(item[0][1][0]),
+                                                                               E2_ORDER.index(item[0][1][1])))]
+    # x: telling interval on a log axis, "never" (I0) one step past the longest, then the goal and position points
+    intervals = {"C1": 1, "C4": 4, "C16": 16, "C64": 64, "I0": 256}
+    extra = {"G1": 1024, "P1": 2048}
+    fig, ax = plt.subplots(figsize=(SINGLE_COLUMN, 2.4), layout="constrained")
+    for series in E2_ORDER:
+        line = [row for row in rows if row["series"] == series]
+        if not line:
+            continue
+        colour, marker = SERIES[series]
+        told = [row for row in line if row["condition"] in intervals]
+        x = [intervals[row["condition"]] for row in told]
+        ax.fill_between(x, [row["ci_low"] for row in told], [row["ci_high"] for row in told], color=colour,
+                        alpha=0.15, lw=0)
+        ax.plot(x, [row["iqm"] for row in told], color=colour, marker=marker, ms=MARKER_SIZE, mec="white", mew=0.6,
+                lw=LINE_WIDTH, label=series)
+        for row in line:
+            if row["condition"] in extra:
+                dot_with_ci(ax, extra[row["condition"]], row, series)
+    ax.axhline(0.5, color=INK_SECONDARY, lw=0.8, ls="--")
+    ax.axvline(16, color=AXIS, lw=0.8, ls=":")
+    ax.text(16, 0.03, "16 frames", rotation=90, ha="right", va="bottom", fontsize=6.5, color=INK_SECONDARY)
+    ax.axvline(512, color=AXIS, lw=0.8)
+    ax.set_xscale("log", base=2)
+    ticks = {**intervals, **extra}
+    ax.set_xticks(list(ticks.values()), ["1", "4", "16", "64", "never", "goal", "xy"])
+    ax.minorticks_off()
+    ax.set_xlim(0.7, 2900)
+    ax.set_ylim(0.0, 1.03)
+    ax.set_xlabel("Cue told every … steps")
+    ax.set_ylabel("Success rate (IQM)")
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncols=len(E2_ORDER), columnspacing=1.0, handlelength=1.8)
+
+    e2_table(sweep_dir, storage / "figures" / str(cfg.timestamp), 0, condition_of=e3t_condition, name="table_e3t")
+    return "fig_e3t", fig, rows
+
+
 # -- E4: effect of every level, by tier --
 
 def load_promotion(path: Path):
@@ -574,7 +658,7 @@ def save_rows(rows, path: Path):
         writer.writeheader()
         writer.writerows(rows)
 
-FIGURES = {"e1": figure_e1, "e1b": figure_e1b, "e2": figure_e2, "e3": figure_e3, "e4": figure_e4}
+FIGURES = {"e1": figure_e1, "e1b": figure_e1b, "e2": figure_e2, "e3": figure_e3, "e3t": figure_e3t, "e4": figure_e4}
 
 
 @hydra.main( config_path="../configs", config_name="base", version_base=None)

@@ -46,8 +46,10 @@ import wandb
 # Splitting on these keys, not on "_", keeps values like room_local and frame_stack intact
 STORAGE_KEYS = ["encoder", "backbone", "frame_stack", "grid_cell", "auxiliary_head", "bptt", "colour", "goal",
                 "ginfo", "pinfo", "ggrid", "fov", "act", "cpen", "gamma", "ep", "mask", "width", "lr", "aux",
-                "depth", "modact", "mb", "bs"]
-_KEY_SPLIT = re.compile(r"_(?=(?:" + "|".join(STORAGE_KEYS) + r"):)")
+                "depth", "layers", "jshape", "cue", "ph", "modact", "mb", "bs"]
+# Short keys of names that would pass 255 bytes otherwise (train.run_names), parsed back to the full ones
+STORAGE_ALIASES = {"gc": "grid_cell", "ah": "auxiliary_head"}
+_KEY_SPLIT = re.compile(r"_(?=(?:" + "|".join(STORAGE_KEYS + list(STORAGE_ALIASES)) + r"):)")
 
 # Theme of a config = the fields it changes; a field set maps to the first theme that contains it.
 # The aux theme runs on the LSTM, so a different backbone marks it. Aux on the base backbone belongs to
@@ -63,7 +65,8 @@ THEME_FIELDS = [
 
 def parse_storage_name(name: str):
     """'encoder:mlp_backbone:lstm_..._lr:0.0003' -> {'encoder': 'mlp', 'backbone': 'lstm', ..., 'lr': '0.0003'}"""
-    return dict(field.split(":", 1) for field in _KEY_SPLIT.split(name))
+    fields = (field.split(":", 1) for field in _KEY_SPLIT.split(name))
+    return {STORAGE_ALIASES.get(key, key): value for key, value in fields}
 
 def theme_of(changed: set):
     if not changed:

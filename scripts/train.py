@@ -17,6 +17,7 @@ import wandb
 from utils import (create_ppo_agent, evaluate_model_on_metrics,
 save_video, create_buffer, create_algorithm, create_environment, seed_metric_summary)
 from envs import (NavigationEnv, FrameStackWrapper, compute_num_rays, compute_proprio_dim)
+from utils.rollout_video import FPS, record
 
 
 import torch
@@ -50,7 +51,12 @@ def variant_name(cfg: DictConfig):
            if cfg.head.auxiliary_head.enabled else "")
         # Only when they differ from the default, so the folders of earlier sweeps keep their names
         + (f"_depth:{depth}" if depth != 2 else "")
+        + (f"_layers:{cfg.backbone.lstm_num_layers}" if recurrent and cfg.backbone.lstm_num_layers != 2 else "")
         + (f"_jshape:{cfg.env.junction_shaping}" if cfg.env.get("junction_shaping", 0.0) != 0.0 else "")
+        # Told the cue every N steps, 0 = never (slot reserved). Short: with the goal slots the name nears 255 bytes
+        + (f"_cue:{info.cue_interval if info.cue_info == 'every' else 0}" if info.get("cue_info", "none") != "none" else "")
+        # Random telling phase; abbreviated, an LSTM's E3T name is already ~245 bytes
+        + ("_ph:rnd" if info.get("cue_phase", "start") == "random" else "")
         + ("_modact:True" if cfg.module_output_activation else "")
         # Minibatch sizes set the number of updates per iteration: envs for a recurrent backbone (default 64),
         # samples for the MLP (default 256)
@@ -77,6 +83,12 @@ def run_names(cfg: DictConfig):
     recurrent = cfg.backbone.name != "mlp"
     storage_name = (architecture_name + (f"_bptt:{cfg.backbone.bptt_window_size}" if recurrent else "")
                     + "_" + variant_name(cfg))
+    # It is one folder name: past 255 bytes the run only fails when it first writes there. Only names over the
+    # limit get the short keys (e4_promotion.STORAGE_ALIASES), so every earlier folder keeps its name
+    if len(storage_name.encode()) > 255:
+        storage_name = storage_name.replace("_grid_cell:", "_gc:", 1).replace("_auxiliary_head:", "_ah:", 1)
+    if len(storage_name.encode()) > 255:
+        raise ValueError(f"Storage name is {len(storage_name.encode())} bytes, the limit is 255: {storage_name}")
     return architecture_name, storage_name
 
 @hydra.main( config_path="../configs", config_name="base", version_base=None)
@@ -116,6 +128,8 @@ def main(cfg: DictConfig):
                               f"colour:{cfg.env.colour_mode}", f"goal:{cfg.env.goal_mode}",
                               f"goal_info:{cfg.env.information.goal_info}",
                               f"position_info:{cfg.env.information.position_info}",
+                              f"cue_info:{cfg.env.information.get('cue_info', 'none')}",
+                              f"cue_phase:{cfg.env.information.get('cue_phase', 'start')}",
                               f"fov:{cfg.env.fov}", f"action:{cfg.env.action_type}"],
                         sync_tensorboard=True, reinit=True, mode=cfg.wandb.mode):
 
@@ -152,15 +166,18 @@ def main(cfg: DictConfig):
         agent.eval()
 
         # --- Rollout + video ---
+        # Whole deterministic episodes of best.pt (one per cue in the twin rooms, else 3), drawn from the env state
+        # with rays, trail and outcome (utils/rollout_video.py, the same renderer as the report's rollouts)
         render_env = create_environment(cfg=cfg, agent=agent, num_rays=num_rays,
                                         ray_dim=ray_dim, num_envs=1, device=device)
-        with torch.no_grad():
-            frames = render_env.record_rollout(cfg.backbone.name, agent, 200, cfg)
+        title = (f"{room} - {cfg.observation.name}+{cfg.backbone.name}"
+                 + (f" FS{cfg.observation.frame_stack.size}" if frame_stack else "") + f" - seed {cfg.seed}")
+        frames, outcomes = record(agent, render_env, str(ROOT_DIR / cfg.env.room_path), cfg.backbone.name != "mlp", title)
         custom_video_path = run_dir / "videos" / f"rollout.mp4"
-        save_video(frames, custom_video_path)
+        save_video(frames, custom_video_path, fps=FPS)
 
         wandb.log({
-                        f"Rollout": wandb.Video(str(custom_video_path), fps=10, format="mp4")
+                        f"Rollout": wandb.Video(str(custom_video_path), format="mp4", caption="; ".join(outcomes))
                     })
           
         # Evaluate metrics on a fixed starting and ending goal when the goal is fixed (one start/goal pair,
